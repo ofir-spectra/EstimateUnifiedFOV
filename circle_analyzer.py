@@ -400,8 +400,23 @@ class MainWindow(QMainWindow):
                 mask_union = cv2.bitwise_or(mask_union, mask)
             percent_usage = 100.0 * np.sum(mask_union > 0) / (mask_union.shape[0] * mask_union.shape[1])
             percent_usage = round(percent_usage, 1)
+        
+        # Calculate average gray level for each circle
+        img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        avg_gray_levels = []
+        for i, (cx, cy, r, mask) in enumerate(centers_radii):
+            if np.sum(mask) > 0:
+                avg_gl = np.mean(img_gray[mask > 0])
+                avg_gray_levels.append(round(avg_gl, 1))
+                # Add text overlay on the image showing "Avg. GL = XXX"
+                text = f"Avg.GL={avg_gl:.1f}"
+                text_y = int(cy) + 90
+                cv2.putText(overlay, text, (int(cx) - 90, text_y), cv2.FONT_HERSHEY_SIMPLEX, 1.8, (0, 255, 255), 5)
+            else:
+                avg_gray_levels.append(None)
+        
         radii = [r for (_, _, r, _) in centers_radii]
-        return overlay, overlap_img, radii, overlap_internal_radius, d1, d2, percent_usage
+        return overlay, overlap_img, radii, overlap_internal_radius, d1, d2, percent_usage, avg_gray_levels
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Circle Analyzer")
@@ -490,7 +505,10 @@ class MainWindow(QMainWindow):
         if not main_folder:
             return
         # Step 2: Check for images in main folder
-        image_files = [f for f in os.listdir(main_folder) if f.lower().endswith('-00-org.png')  and f.lower().startswith('c')]
+        # First try ex*e-00-org.png pattern, then fall back to c*-00-org.png
+        image_files = [f for f in os.listdir(main_folder) if f.lower().endswith('e-00-org.png') and f.lower().startswith('ex')]
+        if not image_files:
+            image_files = [f for f in os.listdir(main_folder) if f.lower().endswith('-00-org.png')  and f.lower().startswith('c')]
         subfolders = [os.path.join(main_folder, d) for d in os.listdir(main_folder) if os.path.isdir(os.path.join(main_folder, d))]
         folders = []
         if image_files:
@@ -534,7 +552,10 @@ class MainWindow(QMainWindow):
         folder_image_lists = []
         for folder in folders:
             all_images = [f for f in os.listdir(folder) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))]
-            image_files = [f for f in all_images if f.lower().endswith("00-org.png") and f.lower().startswith('c')]
+            # First try ex*e-00-org.png pattern, then fall back to c*-00-org.png
+            image_files = [f for f in all_images if f.lower().endswith("e-00-org.png") and f.lower().startswith('ex')]
+            if not image_files:
+                image_files = [f for f in all_images if f.lower().endswith("00-org.png") and f.lower().startswith('c')]
             print(f"Processing folder: {folder} ({len(image_files)} images out of {len(all_images)} images)")
             folder_image_lists.append((folder, image_files))
             total_images += len(image_files)
@@ -549,7 +570,7 @@ class MainWindow(QMainWindow):
         # Create CSV at the beginning with date_time prefix
         dt_prefix = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         csv_path = os.path.join(os.getcwd(), f"{dt_prefix}_all_results.csv")
-        fieldnames = ["folder", "filename", "r1", "r2", "r3", "r4", "d1", "d2", "sensor_usage"]
+        fieldnames = ["folder", "filename", "r1", "r2", "r3", "r4", "d1", "d2", "sensor_usage", "Avg. GL Q1", "Avg. GL Q2", "Avg. GL Q3", "Avg. GL Q4"]
         with open(csv_path, "w", newline="") as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
@@ -560,8 +581,8 @@ class MainWindow(QMainWindow):
             img = cv2.imread(img_path, cv2.IMREAD_COLOR)
             if img is None:
                 return None
-            overlay, overlap_img, radii, overlap_internal_radius, ellipsoid_d1, ellipsoid_d2, percent_usage = self.analyze_and_overlay(img, rgb_threshold)
-            return (folder, fname, overlay, overlap_img, radii, ellipsoid_d1, ellipsoid_d2, percent_usage)
+            overlay, overlap_img, radii, overlap_internal_radius, ellipsoid_d1, ellipsoid_d2, percent_usage, avg_gray_levels = self.analyze_and_overlay(img, rgb_threshold)
+            return (folder, fname, overlay, overlap_img, radii, ellipsoid_d1, ellipsoid_d2, percent_usage, avg_gray_levels)
 
         # Prepare all jobs
         jobs = []
@@ -587,7 +608,7 @@ class MainWindow(QMainWindow):
                 self.progress_bar.setValue(processed)
                 QApplication.processEvents()
                 continue
-            folder, fname, overlay, overlap_img, radii, ellipsoid_d1, ellipsoid_d2, percent_usage = result
+            folder, fname, overlay, overlap_img, radii, ellipsoid_d1, ellipsoid_d2, percent_usage, avg_gray_levels = result
             overlay_rgb = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
             if overlap_img is not None:
                 left_img = overlay_rgb.copy()
@@ -637,7 +658,11 @@ class MainWindow(QMainWindow):
                 **{f"r{i+1}": radii[i] if i < len(radii) else None for i in range(4)},
                 "d1": ellipsoid_d1,
                 "d2": ellipsoid_d2,
-                "sensor_usage": f"{percent_usage:.1f}" if percent_usage is not None else ""
+                "sensor_usage": f"{percent_usage:.1f}" if percent_usage is not None else "",
+                "Avg. GL Q1": avg_gray_levels[0] if len(avg_gray_levels) > 0 else None,
+                "Avg. GL Q2": avg_gray_levels[1] if len(avg_gray_levels) > 1 else None,
+                "Avg. GL Q3": avg_gray_levels[2] if len(avg_gray_levels) > 2 else None,
+                "Avg. GL Q4": avg_gray_levels[3] if len(avg_gray_levels) > 3 else None,
             }
             all_results.append(result_row)
             with open(csv_path, "a", newline="") as csvfile:
@@ -693,7 +718,7 @@ class MainWindow(QMainWindow):
                 self.progress_bar.setVisible(False)
                 QMessageBox.critical(self, "Error", "Failed to load image.")
                 return
-            overlay, overlap_img, radii, overlap_internal_radius, ellipsoid_d1, ellipsoid_d2, percent_usage = self.analyze_and_overlay(img, getattr(self, 'rgb_threshold', 8))
+            overlay, overlap_img, radii, overlap_internal_radius, ellipsoid_d1, ellipsoid_d2, percent_usage, avg_gray_levels = self.analyze_and_overlay(img, getattr(self, 'rgb_threshold', 8))
             # Apply CLAHE to the original image for better visibility (left image only)
             img_bgr = img.copy()
             lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
