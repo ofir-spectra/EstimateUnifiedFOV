@@ -405,13 +405,23 @@ class MainWindow(QMainWindow):
         img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         avg_gray_levels = []
         for i, (cx, cy, r, mask) in enumerate(centers_radii):
-            if np.sum(mask) > 0:
-                avg_gl = np.mean(img_gray[mask > 0])
-                avg_gray_levels.append(round(avg_gl, 1))
-                # Add text overlay on the image showing "Avg. GL = XXX"
-                text = f"Avg.GL={avg_gl:.1f}"
-                text_y = int(cy) + 90
-                cv2.putText(overlay, text, (int(cx) - 90, text_y), cv2.FONT_HERSHEY_SIMPLEX, 1.8, (0, 255, 255), 5)
+            if r > 0:
+                # Create elliptical mask with half the radius (d1/2, d2/2) for central pixels only
+                central_mask = np.zeros_like(img_gray, dtype=np.uint8)
+                # Use r/2 for circular approximation (half the detected circle radius)
+                cv2.circle(central_mask, (int(cx), int(cy)), int(r/2), 255, -1)
+                # Calculate average only for central pixels
+                central_pixels = img_gray[central_mask > 0]
+                if len(central_pixels) > 0:
+                    avg_gl = np.mean(central_pixels)
+                    avg_gray_levels.append(round(avg_gl, 1))
+                    # Add text overlay on the image showing "Avg. GL = XXX"
+                    # Adjust spacing to match the distance between r= and (cx,cy) lines
+                    text = f"Avg.GL={avg_gl:.1f}"
+                    text_y = int(cy) + 160  # Changed from +90 to +160 for better spacing
+                    cv2.putText(overlay, text, (int(cx) - 90, text_y), cv2.FONT_HERSHEY_SIMPLEX, 1.8, (0, 255, 255), 5)
+                else:
+                    avg_gray_levels.append(None)
             else:
                 avg_gray_levels.append(None)
         
