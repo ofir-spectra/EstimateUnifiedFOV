@@ -415,6 +415,11 @@ class MainWindow(QMainWindow):
                 if len(central_pixels) > 0:
                     avg_gl = np.mean(central_pixels)
                     avg_gray_levels.append(round(avg_gl, 1))
+                    
+                    # Add semi-transparent overlay showing sampled region for Avg. GL
+                    # Use white color with low alpha for visibility
+                    overlay = self.draw_transparent_circle(overlay, (int(cx), int(cy)), int(r/2), (255, 255, 255, 60))
+                    
                     # Add text overlay on the image showing "Avg. GL = XXX"
                     # Adjust spacing to match the distance between r= and (cx,cy) lines
                     text = f"Avg.GL={avg_gl:.1f}"
