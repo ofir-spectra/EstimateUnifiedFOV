@@ -569,6 +569,8 @@ class MainWindow(QMainWindow):
             if not image_files:
                 image_files = [f for f in all_images if f.lower().endswith("00-org.png") and f.lower().startswith('c')]
             print(f"Processing folder: {folder} ({len(image_files)} images out of {len(all_images)} images)")
+            if len(image_files) > 0:
+                print(f"  Sample files: {image_files[:3]}...")
             folder_image_lists.append((folder, image_files))
             total_images += len(image_files)
         if total_images == 0:
@@ -582,6 +584,7 @@ class MainWindow(QMainWindow):
         # Create CSV at the beginning with date_time prefix
         dt_prefix = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         csv_path = os.path.join(os.getcwd(), f"{dt_prefix}_all_results.csv")
+        print(f"CSV will be saved to: {csv_path}")
         fieldnames = ["folder", "filename", "r1", "r2", "r3", "r4", "d1", "d2", "sensor_usage", "Avg. GL Q1", "Avg. GL Q2", "Avg. GL Q3", "Avg. GL Q4"]
         with open(csv_path, "w", newline="") as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
@@ -601,16 +604,31 @@ class MainWindow(QMainWindow):
         for folder, image_files in folder_image_lists:
             output_dir = os.path.join(os.getcwd(), os.path.basename(folder) + "_outputs")
             os.makedirs(output_dir, exist_ok=True)
+            print(f"Output directory: {output_dir}")
             for fname in image_files:
                 jobs.append((folder, fname, getattr(self, 'rgb_threshold', 16), output_dir))
+        
+        print(f"\nStarting processing of {len(jobs)} images...")
 
         results = [None] * len(jobs)
+        processed = 0
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future_to_idx = {executor.submit(process_one_image, job[0], job[1], job[2]): (i, job) for i, job in enumerate(jobs)}
             for future in concurrent.futures.as_completed(future_to_idx):
                 i, job = future_to_idx[future]
-                result = future.result()
-                results[i] = (job, result)
+                try:
+                    result = future.result()
+                    results[i] = (job, result)
+                except Exception as e:
+                    print(f"  [ERROR] Failed to process {job[1]}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    results[i] = (job, None)
+                # Update progress bar in real-time
+                processed += 1
+                self.progress_bar.setValue(processed)
+                QApplication.processEvents()
+                print(f"  Processed {processed}/{len(jobs)}: {job[1]}")
 
         processed = 0
         for (folder, fname, rgb_threshold, output_dir), result in results:
@@ -641,6 +659,7 @@ class MainWindow(QMainWindow):
                 combined = overlay_rgb
             out_img_path = os.path.join(output_dir, os.path.splitext(fname)[0] + "_overlay.png")
             cv2.imwrite(out_img_path, cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
+            print(f"  [SAVED] {out_img_path}")
             overlay_text = f"Sensor Usage: {percent_usage:.1f}%" if percent_usage is not None else "Sensor Usage: N/A"
             overlay_rgb_disp = overlay_rgb.copy()
             cv2.putText(overlay_rgb_disp, overlay_text, (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (255,255,255), 5, cv2.LINE_AA)
