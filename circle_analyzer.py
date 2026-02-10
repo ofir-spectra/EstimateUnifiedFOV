@@ -457,7 +457,7 @@ class MainWindow(QMainWindow):
         self.open_button.clicked.connect(self.open_image)
         self.top_bar_layout.addWidget(self.open_button)
         self.folder_button = QPushButton("Process Folder")
-        self.folder_button.clicked.connect(self.process_folder)
+        self.folder_button.clicked.connect(self.process_folder_safe)
         self.top_bar_layout.addWidget(self.folder_button)
 
         # Slider and label
@@ -493,11 +493,23 @@ class MainWindow(QMainWindow):
         self.image_path = None
         # Threshold value
         self.rgb_threshold = 1
+    
+    def process_folder_safe(self):
+        """Wrapper to catch and display exceptions from process_folder"""
+        try:
+            self.process_folder()
+        except Exception as e:
+            import traceback
+            from PyQt6.QtWidgets import QMessageBox
+            error_msg = f"Error during folder processing:\n\n{str(e)}\n\n{traceback.format_exc()}"
+            print(error_msg)
+            QMessageBox.critical(self, "Error", error_msg)
+            self.progress_bar.setVisible(False)
+    
     def process_folder(self):
         from PyQt6.QtWidgets import QFileDialog, QMessageBox, QListWidget, QDialog, QVBoxLayout, QPushButton, QLabel
         import os
         import csv
-        import matplotlib.pyplot as plt
         # Custom dialog for multi-folder selection
         from PyQt6.QtWidgets import QDialogButtonBox, QListWidgetItem
         # Step 1: Select main folder
@@ -680,16 +692,16 @@ class MainWindow(QMainWindow):
             plt.figure(figsize=(10,6))
             for i in range(1,5):
                 plt.plot(df["filename"], df[f"r{i}"], marker='o', label=f"r{i}")
-            plt.plot(df["filename"], df["internal_r"], marker='x', label="internal_r", linewidth=3, color='black')
             plt.xlabel("Image filename")
             plt.ylabel("Radius (pixels)")
-            plt.title("Detected Radii and Internal Overlap Radius")
+            plt.title("Detected Radii per Quadrant")
             plt.legend()
             plt.xticks(rotation=45, ha='right')
             plt.tight_layout()
             plt.show()
         except Exception as e:
-            QMessageBox.information(self, "Graph Error", f"Could not show graph: {e}")
+            # Silently skip graph if matplotlib/pandas not available
+            print(f"Could not show graph (matplotlib/pandas not installed): {e}")
         finally:
             self.progress_bar.setValue(0)
             self.progress_bar.setVisible(False)
