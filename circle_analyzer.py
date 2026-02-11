@@ -475,6 +475,9 @@ class MainWindow(QMainWindow):
         self.folder_button = QPushButton("Process Folder")
         self.folder_button.clicked.connect(self.process_folder_safe)
         self.top_bar_layout.addWidget(self.folder_button)
+        self.analyze_data_button = QPushButton("Analyze Data")
+        self.analyze_data_button.clicked.connect(self.analyze_csv_data)
+        self.top_bar_layout.addWidget(self.analyze_data_button)
 
         # Slider and label
         self.threshold_label = QtLabel("RGB Threshold: 1")
@@ -841,6 +844,131 @@ class MainWindow(QMainWindow):
         finally:
             self.progress_bar.setValue(0)
             self.progress_bar.setVisible(False)
+    def analyze_csv_data(self):
+        """Load CSV file and create normalized data visualization"""
+        try:
+            import os
+            csv_file = QFileDialog.getOpenFileName(self, "Select CSV File", "", "CSV Files (*.csv)")[0]
+            if not csv_file:
+                return
+            
+            import csv
+            import pandas as pd
+            
+            # Load CSV file
+            df = pd.read_csv(csv_file)
+            
+            # Validate required columns
+            required_cols = ["Avg. GL Q1", "Avg. GL Q2", "Avg. GL Q3", "Avg. GL Q4", "filename"]
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            if missing_cols:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.critical(self, "Missing Columns", f"CSV is missing required columns: {', '.join(missing_cols)}")
+                return
+            
+            # Extract gray level data and validate
+            q1_vals = df["Avg. GL Q1"].values
+            q2_vals = df["Avg. GL Q2"].values
+            q3_vals = df["Avg. GL Q3"].values
+            q4_vals = df["Avg. GL Q4"].values
+            filenames = df["filename"].values
+            
+            # Filter out rows with None/NaN values
+            valid_mask = ~(pd.isna(q1_vals) | pd.isna(q2_vals) | pd.isna(q3_vals) | pd.isna(q4_vals) | (q1_vals == 0))
+            if not valid_mask.any():
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "No Valid Data", "No valid gray level data found in CSV (all Q1 values are 0 or NaN)")
+                return
+            
+            q1_vals = q1_vals[valid_mask]
+            q2_vals = q2_vals[valid_mask]
+            q3_vals = q3_vals[valid_mask]
+            q4_vals = q4_vals[valid_mask]
+            filenames = filenames[valid_mask]
+            
+            # Calculate normalized values (Q2/Q1, Q3/Q1, Q4/Q1)
+            norm_q2 = q2_vals / q1_vals
+            norm_q3 = q3_vals / q1_vals
+            norm_q4 = q4_vals / q1_vals
+            
+            # Calculate averages
+            avg_norm_q2 = np.mean(norm_q2)
+            avg_norm_q3 = np.mean(norm_q3)
+            avg_norm_q4 = np.mean(norm_q4)
+            
+            print(f"CSV Analysis Results:")
+            print(f"  Loaded {len(filenames)} valid images")
+            print(f"  Average Q2/Q1: {avg_norm_q2:.3f}")
+            print(f"  Average Q3/Q1: {avg_norm_q3:.3f}")
+            print(f"  Average Q4/Q1: {avg_norm_q4:.3f}")
+            
+            # Create visualization
+            self.create_normalized_plot(filenames, norm_q2, norm_q3, norm_q4, 
+                                       avg_norm_q2, avg_norm_q3, avg_norm_q4)
+            
+        except Exception as e:
+            import traceback
+            from PyQt6.QtWidgets import QMessageBox
+            error_msg = f"Error during CSV analysis:\n\n{str(e)}\n\n{traceback.format_exc()}"
+            print(error_msg)
+            QMessageBox.critical(self, "Error", error_msg)
+    
+    def create_normalized_plot(self, filenames, norm_q2, norm_q3, norm_q4, 
+                              avg_q2, avg_q3, avg_q4):
+        """Create matplotlib plot with normalized quadrant ratios"""
+        try:
+            import matplotlib.pyplot as plt
+            import matplotlib
+            matplotlib.use('TkAgg')  # Use TkAgg backend for better compatibility
+            
+            fig, ax = plt.subplots(figsize=(14, 7))
+            
+            # X-axis: filename indices
+            x = np.arange(len(filenames))
+            
+            # Plot the three normalized ratio curves with markers
+            ax.plot(x, norm_q2, 'b-o', label='Q2/Q1', linewidth=2, markersize=4)
+            ax.plot(x, norm_q3, 'g-s', label='Q3/Q1', linewidth=2, markersize=4)
+            ax.plot(x, norm_q4, 'r-^', label='Q4/Q1', linewidth=2, markersize=4)
+            
+            # Add horizontal average lines (dotted)
+            ax.axhline(y=avg_q2, color='blue', linestyle='--', linewidth=2, alpha=0.7, label=f'Avg Q2/Q1 = {avg_q2:.3f}')
+            ax.axhline(y=avg_q3, color='green', linestyle='--', linewidth=2, alpha=0.7, label=f'Avg Q3/Q1 = {avg_q3:.3f}')
+            ax.axhline(y=avg_q4, color='red', linestyle='--', linewidth=2, alpha=0.7, label=f'Avg Q4/Q1 = {avg_q4:.3f}')
+            
+            # Add average values as text annotations
+            y_pos = ax.get_ylim()[1] * 0.95
+            ax.text(0.02, 0.98, f'Avg Q2/Q1: {avg_q2:.3f}', transform=ax.transAxes, 
+                   fontsize=11, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='blue', alpha=0.3))
+            ax.text(0.02, 0.90, f'Avg Q3/Q1: {avg_q3:.3f}', transform=ax.transAxes,
+                   fontsize=11, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='green', alpha=0.3))
+            ax.text(0.02, 0.82, f'Avg Q4/Q1: {avg_q4:.3f}', transform=ax.transAxes,
+                   fontsize=11, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='red', alpha=0.3))
+            
+            # Labels and formatting
+            ax.set_xlabel('Image Index', fontsize=12, fontweight='bold')
+            ax.set_ylabel('Normalized Gray Level Ratio', fontsize=12, fontweight='bold')
+            ax.set_title('Normalized Quadrant Ratios (Q/Q1)', fontsize=14, fontweight='bold')
+            ax.legend(loc='upper right', fontsize=10)
+            ax.grid(True, alpha=0.3)
+            
+            # Set x-axis to show every nth label to avoid crowding
+            step = max(1, len(filenames) // 15)
+            ax.set_xticks(x[::step])
+            ax.set_xticklabels([f"{i}" for i in range(0, len(filenames), step)], fontsize=9)
+            
+            plt.tight_layout()
+            plt.show()
+            
+            print("Plot displayed successfully")
+            
+        except Exception as e:
+            import traceback
+            print(f"Error creating plot: {e}")
+            print(traceback.format_exc())
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Plot Error", f"Failed to create plot:\n{e}")
+
     def draw_transparent_circle(self, image, center, radius, color, fill=False):
         # Always fill the circle with 50% opacity for the left-side image
         overlay = image.copy()
