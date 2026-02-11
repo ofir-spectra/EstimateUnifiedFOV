@@ -855,6 +855,10 @@ class MainWindow(QMainWindow):
             import csv
             import pandas as pd
             
+            # Set matplotlib backend to Qt5Agg before importing pyplot
+            import matplotlib
+            matplotlib.use('Qt5Agg')
+            
             # Load CSV file
             df = pd.read_csv(csv_file)
             
@@ -918,8 +922,8 @@ class MainWindow(QMainWindow):
         """Create matplotlib plot with normalized quadrant ratios"""
         try:
             import matplotlib.pyplot as plt
-            import matplotlib
-            matplotlib.use('TkAgg')  # Use TkAgg backend for better compatibility
+            # Don't force backend - use Qt5Agg which is compatible with PyQt6
+            # matplotlib.use() should be called before importing pyplot
             
             fig, ax = plt.subplots(figsize=(14, 7))
             
