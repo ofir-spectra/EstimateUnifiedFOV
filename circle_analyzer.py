@@ -8,7 +8,7 @@ from PyQt6.QtGui import QPixmap, QPalette, QColor, QImage, QPainter, QPen, QBrus
 from PyQt6.QtCore import Qt
 
 class MainWindow(QMainWindow):
-    def analyze_and_overlay(self, img, rgb_threshold):
+    def analyze_and_overlay(self, img, rgb_threshold, gl_radius_multiplier=0.5):
         import cv2
         import numpy as np
         # --- Mask extraction ---
@@ -406,10 +406,11 @@ class MainWindow(QMainWindow):
         avg_gray_levels = []
         for i, (cx, cy, r, mask) in enumerate(centers_radii):
             if r > 0:
-                # Create elliptical mask with half the radius (d1/2, d2/2) for central pixels only
+                # Create elliptical mask with specified radius multiplier for central pixels
                 central_mask = np.zeros_like(img_gray, dtype=np.uint8)
-                # Use r/2 for circular approximation (half the detected circle radius)
-                cv2.circle(central_mask, (int(cx), int(cy)), int(r/2), 255, -1)
+                # Use radius multiplier (e.g., r/2, r/4, or 1*r)
+                sampling_radius = int(r * gl_radius_multiplier)
+                cv2.circle(central_mask, (int(cx), int(cy)), sampling_radius, 255, -1)
                 # Calculate average only for central pixels
                 central_pixels = img_gray[central_mask > 0]
                 if len(central_pixels) > 0:
@@ -418,7 +419,7 @@ class MainWindow(QMainWindow):
                     
                     # Add semi-transparent overlay showing sampled region for Avg. GL
                     # Use white color with low alpha for visibility
-                    overlay = self.draw_transparent_circle(overlay, (int(cx), int(cy)), int(r/2), (255, 255, 255, 60))
+                    overlay = self.draw_transparent_circle(overlay, (int(cx), int(cy)), sampling_radius, (255, 255, 255, 60))
                     
                     # Add text overlay on the image showing "Avg. GL = XXX"
                     # Adjust spacing to match the distance between r= and (cx,cy) lines
@@ -456,7 +457,7 @@ class MainWindow(QMainWindow):
         self.setPalette(palette)
 
     def init_ui(self):
-        from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QScrollArea, QSlider, QLabel as QtLabel, QProgressBar
+        from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QScrollArea, QSlider, QLabel as QtLabel, QProgressBar, QComboBox
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout()
@@ -487,6 +488,17 @@ class MainWindow(QMainWindow):
         self.threshold_slider.valueChanged.connect(self.on_threshold_changed)
         self.top_bar_layout.addWidget(self.threshold_slider)
 
+        # Radius multiplier dropdown for Avg. GL calculation
+        self.radius_label = QtLabel("Avg GL Radius:")
+        self.top_bar_layout.addWidget(self.radius_label)
+        self.radius_combo = QComboBox()
+        self.radius_combo.addItem("1/4 × r", 0.25)
+        self.radius_combo.addItem("1/2 × r", 0.5)
+        self.radius_combo.addItem("1 × r", 1.0)
+        self.radius_combo.setCurrentIndex(1)  # Default to 1/2 × r
+        self.radius_combo.currentIndexChanged.connect(self.on_radius_changed)
+        self.top_bar_layout.addWidget(self.radius_combo)
+
         # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 0)  # Indeterminate by default
@@ -508,6 +520,8 @@ class MainWindow(QMainWindow):
         self.image_path = None
         # Threshold value
         self.rgb_threshold = 1
+        # Radius multiplier for Avg. GL calculation
+        self.gl_radius_multiplier = 0.5  # Default to 1/2 × r
     
     def process_folder_safe(self):
         """Wrapper to catch and display exceptions from process_folder"""
@@ -605,13 +619,13 @@ class MainWindow(QMainWindow):
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
         import concurrent.futures
-        def process_one_image(folder, fname, rgb_threshold):
+        def process_one_image(folder, fname, rgb_threshold, gl_radius_multiplier):
             import cv2, os
             img_path = os.path.join(folder, fname)
             img = cv2.imread(img_path, cv2.IMREAD_COLOR)
             if img is None:
                 return None
-            overlay, overlap_img, radii, overlap_internal_radius, ellipsoid_d1, ellipsoid_d2, percent_usage, avg_gray_levels = self.analyze_and_overlay(img, rgb_threshold)
+            overlay, overlap_img, radii, overlap_internal_radius, ellipsoid_d1, ellipsoid_d2, percent_usage, avg_gray_levels = self.analyze_and_overlay(img, rgb_threshold, gl_radius_multiplier)
             return (folder, fname, overlay, overlap_img, radii, ellipsoid_d1, ellipsoid_d2, percent_usage, avg_gray_levels)
 
         # Prepare all jobs
@@ -621,14 +635,14 @@ class MainWindow(QMainWindow):
             os.makedirs(output_dir, exist_ok=True)
             print(f"Output directory: {output_dir}")
             for fname in image_files:
-                jobs.append((folder, fname, getattr(self, 'rgb_threshold', 16), output_dir))
+                jobs.append((folder, fname, getattr(self, 'rgb_threshold', 16), getattr(self, 'gl_radius_multiplier', 0.5), output_dir))
         
         print(f"\nStarting processing of {len(jobs)} images...")
 
         results = [None] * len(jobs)
         processed = 0
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future_to_idx = {executor.submit(process_one_image, job[0], job[1], job[2]): (i, job) for i, job in enumerate(jobs)}
+            future_to_idx = {executor.submit(process_one_image, job[0], job[1], job[2], job[3]): (i, job) for i, job in enumerate(jobs)}
             for future in concurrent.futures.as_completed(future_to_idx):
                 i, job = future_to_idx[future]
                 try:
@@ -646,7 +660,7 @@ class MainWindow(QMainWindow):
                 print(f"  Processed {processed}/{len(jobs)}: {job[1]}")
 
         processed = 0
-        for (folder, fname, rgb_threshold, output_dir), result in results:
+        for (folder, fname, rgb_threshold, gl_radius_multiplier, output_dir), result in results:
             if result is None:
                 print(f"  [SKIP] Could not load image: {os.path.join(folder, fname)}")
                 processed += 1
@@ -748,6 +762,13 @@ class MainWindow(QMainWindow):
         self.threshold_label.setText(f"RGB Threshold: {value}")
         if self.image_path:
             self.analyze_image()
+    
+    def on_radius_changed(self, index):
+        """Called when radius multiplier dropdown changes"""
+        self.gl_radius_multiplier = self.radius_combo.itemData(index)
+        if self.image_path:
+            self.open_image()
+    
     def analyze_image(self):
         from PyQt6.QtWidgets import QMessageBox
         import time
@@ -764,7 +785,7 @@ class MainWindow(QMainWindow):
                 self.progress_bar.setVisible(False)
                 QMessageBox.critical(self, "Error", "Failed to load image.")
                 return
-            overlay, overlap_img, radii, overlap_internal_radius, ellipsoid_d1, ellipsoid_d2, percent_usage, avg_gray_levels = self.analyze_and_overlay(img, getattr(self, 'rgb_threshold', 8))
+            overlay, overlap_img, radii, overlap_internal_radius, ellipsoid_d1, ellipsoid_d2, percent_usage, avg_gray_levels = self.analyze_and_overlay(img, getattr(self, 'rgb_threshold', 8), getattr(self, 'gl_radius_multiplier', 0.5))
             # Apply CLAHE to the original image for better visibility (left image only)
             img_bgr = img.copy()
             lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
