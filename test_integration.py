@@ -77,7 +77,7 @@ except Exception as e:
     sys.exit(1)
 
 # Test 6: Test the plot creation directly (without file dialog)
-print("\n[TEST 6] Testing plot creation (direct call)...")
+print("\n[TEST 6] Testing plot creation with STD bands...")
 try:
     import numpy as np
     
@@ -91,16 +91,21 @@ try:
     avg_q3 = np.mean(norm_q3)
     avg_q4 = np.mean(norm_q4)
     
-    print(f"  Creating plot with test data...")
-    print(f"    Filenames: {len(filenames)}")
-    print(f"    Average Q2/Q1: {avg_q2:.3f}")
-    print(f"    Average Q3/Q1: {avg_q3:.3f}")
-    print(f"    Average Q4/Q1: {avg_q4:.3f}")
+    std_q2 = np.std(norm_q2)
+    std_q3 = np.std(norm_q3)
+    std_q4 = np.std(norm_q4)
     
-    # Call the plot creation method
+    print(f"  Creating plot with STD bands...")
+    print(f"    Filenames: {len(filenames)}")
+    print(f"    Average Q2/Q1: {avg_q2:.3f}, STD: {std_q2:.3f}")
+    print(f"    Average Q3/Q1: {avg_q3:.3f}, STD: {std_q3:.3f}")
+    print(f"    Average Q4/Q1: {avg_q4:.3f}, STD: {std_q4:.3f}")
+    
+    # Call the plot creation method with STD parameters
     window.create_normalized_plot(filenames, norm_q2, norm_q3, norm_q4, 
-                                  avg_q2, avg_q3, avg_q4)
-    print("  ✓ Plot created successfully!")
+                                  avg_q2, avg_q3, avg_q4,
+                                  std_q2, std_q3, std_q4)
+    print("  ✓ Plot with STD bands created successfully!")
     
 except Exception as e:
     print(f"  ✗ Plot creation failed: {e}")

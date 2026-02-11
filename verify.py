@@ -61,33 +61,63 @@ try:
     print(f"    OK - Average Q3/Q1: {avg_q3:.3f}")
     print(f"    OK - Average Q4/Q1: {avg_q4:.3f}")
     
-    # Test 6: Test plot creation logic (without display)
-    print("[6] Testing plot creation logic...")
+    # Test 6: Test plot creation logic with STD bands (without display)
+    print("[6] Testing plot creation with STD bands...")
     import matplotlib
     matplotlib.use('Agg')  # Use non-interactive backend for testing
     import matplotlib.pyplot as plt
     
-    # Create a test plot using the same logic
+    # Calculate standard deviations for test data
+    std_q2 = float(np.std(norm_q2))
+    std_q3 = float(np.std(norm_q3))
+    std_q4 = float(np.std(norm_q4))
+    
+    print(f"    STD Q2/Q1: {std_q2:.3f}")
+    print(f"    STD Q3/Q1: {std_q3:.3f}")
+    print(f"    STD Q4/Q1: {std_q4:.3f}")
+    
+    # Create a test plot using the same logic with STD bands
     fig, ax = plt.subplots(figsize=(14, 7))
     x = np.arange(len(filenames))
+    
+    # Get STD requirement (default 1%)
+    std_req = 1.0
+    std_multiplier = std_req / 100.0
     
     ax.plot(x, norm_q2, 'b-o', label='Q2/Q1', linewidth=2, markersize=4)
     ax.plot(x, norm_q3, 'g-s', label='Q3/Q1', linewidth=2, markersize=4)
     ax.plot(x, norm_q4, 'r-^', label='Q4/Q1', linewidth=2, markersize=4)
     
-    ax.axhline(y=avg_q2, color='blue', linestyle='--', linewidth=2, alpha=0.7)
-    ax.axhline(y=avg_q3, color='green', linestyle='--', linewidth=2, alpha=0.7)
-    ax.axhline(y=avg_q4, color='red', linestyle='--', linewidth=2, alpha=0.7)
+    # Add average lines
+    ax.axhline(y=avg_q2, color='blue', linestyle='-', linewidth=2, alpha=0.7)
+    ax.axhline(y=avg_q3, color='green', linestyle='-', linewidth=2, alpha=0.7)
+    ax.axhline(y=avg_q4, color='red', linestyle='-', linewidth=2, alpha=0.7)
+    
+    # Add STD lines
+    upper_q2 = avg_q2 + (std_q2 * std_multiplier)
+    lower_q2 = avg_q2 - (std_q2 * std_multiplier)
+    ax.axhline(y=upper_q2, color='blue', linestyle='--', linewidth=1.5, alpha=0.5, label=f'Q2/Q1 +STD')
+    ax.axhline(y=lower_q2, color='blue', linestyle='--', linewidth=1.5, alpha=0.5, label=f'Q2/Q1 -STD')
+    
+    upper_q3 = avg_q3 + (std_q3 * std_multiplier)
+    lower_q3 = avg_q3 - (std_q3 * std_multiplier)
+    ax.axhline(y=upper_q3, color='green', linestyle='--', linewidth=1.5, alpha=0.5, label=f'Q3/Q1 +STD')
+    ax.axhline(y=lower_q3, color='green', linestyle='--', linewidth=1.5, alpha=0.5, label=f'Q3/Q1 -STD')
+    
+    upper_q4 = avg_q4 + (std_q4 * std_multiplier)
+    lower_q4 = avg_q4 - (std_q4 * std_multiplier)
+    ax.axhline(y=upper_q4, color='red', linestyle='--', linewidth=1.5, alpha=0.5, label=f'Q4/Q1 +STD')
+    ax.axhline(y=lower_q4, color='red', linestyle='--', linewidth=1.5, alpha=0.5, label=f'Q4/Q1 -STD')
     
     ax.set_xlabel('Image Index', fontsize=12, fontweight='bold')
     ax.set_ylabel('Normalized Gray Level Ratio', fontsize=12, fontweight='bold')
-    ax.set_title('Normalized Quadrant Ratios (Q/Q1)', fontsize=14, fontweight='bold')
-    ax.legend(loc='upper right', fontsize=10)
+    ax.set_title(f'Normalized Quadrant Ratios (Q/Q1) - STD Requirement: {std_req}%', fontsize=14, fontweight='bold')
+    ax.legend(loc='upper left', fontsize=9, ncol=2)
     ax.grid(True, alpha=0.3)
     
     plt.savefig('verify_test_plot.png', dpi=100, bbox_inches='tight')
     plt.close()
-    print("    OK - Plot created and saved to verify_test_plot.png")
+    print("    OK - Plot with STD bands created and saved")
     
     # Success message
     print("\n" + "=" * 70)

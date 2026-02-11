@@ -457,7 +457,7 @@ class MainWindow(QMainWindow):
         self.setPalette(palette)
 
     def init_ui(self):
-        from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QScrollArea, QSlider, QLabel as QtLabel, QProgressBar, QComboBox
+        from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QScrollArea, QSlider, QLabel as QtLabel, QProgressBar, QComboBox, QDoubleSpinBox
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout()
@@ -502,6 +502,18 @@ class MainWindow(QMainWindow):
         self.radius_combo.currentIndexChanged.connect(self.on_radius_changed)
         self.top_bar_layout.addWidget(self.radius_combo)
 
+        # STD Requirement spinbox for CSV analysis
+        self.std_label = QtLabel("STD Req.:")
+        self.top_bar_layout.addWidget(self.std_label)
+        self.std_spinbox = QDoubleSpinBox()
+        self.std_spinbox.setMinimum(0.1)
+        self.std_spinbox.setMaximum(10.0)
+        self.std_spinbox.setValue(1.0)  # Default 1%
+        self.std_spinbox.setSingleStep(0.1)
+        self.std_spinbox.setSuffix(" %")
+        self.std_spinbox.setMaximumWidth(80)
+        self.top_bar_layout.addWidget(self.std_spinbox)
+
         # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 0)  # Indeterminate by default
@@ -525,6 +537,8 @@ class MainWindow(QMainWindow):
         self.rgb_threshold = 1
         # Radius multiplier for Avg. GL calculation
         self.gl_radius_multiplier = 0.5  # Default to 1/2 × r
+        # STD requirement percentage
+        self.std_requirement = 1.0  # Default 1%
     
     def process_folder_safe(self):
         """Wrapper to catch and display exceptions from process_folder"""
@@ -900,15 +914,21 @@ class MainWindow(QMainWindow):
             avg_norm_q3 = np.mean(norm_q3)
             avg_norm_q4 = np.mean(norm_q4)
             
+            # Calculate standard deviations
+            std_norm_q2 = np.std(norm_q2)
+            std_norm_q3 = np.std(norm_q3)
+            std_norm_q4 = np.std(norm_q4)
+            
             print(f"CSV Analysis Results:")
             print(f"  Loaded {len(filenames)} valid images")
-            print(f"  Average Q2/Q1: {avg_norm_q2:.3f}")
-            print(f"  Average Q3/Q1: {avg_norm_q3:.3f}")
-            print(f"  Average Q4/Q1: {avg_norm_q4:.3f}")
+            print(f"  Average Q2/Q1: {avg_norm_q2:.3f} +/- {std_norm_q2:.3f}")
+            print(f"  Average Q3/Q1: {avg_norm_q3:.3f} +/- {std_norm_q3:.3f}")
+            print(f"  Average Q4/Q1: {avg_norm_q4:.3f} +/- {std_norm_q4:.3f}")
             
             # Create visualization
             self.create_normalized_plot(filenames, norm_q2, norm_q3, norm_q4, 
-                                       avg_norm_q2, avg_norm_q3, avg_norm_q4)
+                                       avg_norm_q2, avg_norm_q3, avg_norm_q4,
+                                       std_norm_q2, std_norm_q3, std_norm_q4)
             
         except Exception as e:
             import traceback
@@ -918,8 +938,9 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", error_msg)
     
     def create_normalized_plot(self, filenames, norm_q2, norm_q3, norm_q4, 
-                              avg_q2, avg_q3, avg_q4):
-        """Create matplotlib plot with normalized quadrant ratios"""
+                              avg_q2, avg_q3, avg_q4,
+                              std_q2=None, std_q3=None, std_q4=None):
+        """Create matplotlib plot with normalized quadrant ratios and STD bands"""
         try:
             import matplotlib.pyplot as plt
             # Don't force backend - use Qt5Agg which is compatible with PyQt6
@@ -930,18 +951,40 @@ class MainWindow(QMainWindow):
             # X-axis: filename indices
             x = np.arange(len(filenames))
             
+            # Get STD requirement percentage from GUI
+            std_req = self.std_spinbox.value() if hasattr(self, 'std_spinbox') else 1.0
+            std_multiplier = std_req / 100.0  # Convert percentage to multiplier
+            
             # Plot the three normalized ratio curves with markers
             ax.plot(x, norm_q2, 'b-o', label='Q2/Q1', linewidth=2, markersize=4)
             ax.plot(x, norm_q3, 'g-s', label='Q3/Q1', linewidth=2, markersize=4)
             ax.plot(x, norm_q4, 'r-^', label='Q4/Q1', linewidth=2, markersize=4)
             
-            # Add horizontal average lines (dotted)
-            ax.axhline(y=avg_q2, color='blue', linestyle='--', linewidth=2, alpha=0.7, label=f'Avg Q2/Q1 = {avg_q2:.3f}')
-            ax.axhline(y=avg_q3, color='green', linestyle='--', linewidth=2, alpha=0.7, label=f'Avg Q3/Q1 = {avg_q3:.3f}')
-            ax.axhline(y=avg_q4, color='red', linestyle='--', linewidth=2, alpha=0.7, label=f'Avg Q4/Q1 = {avg_q4:.3f}')
+            # Add horizontal average lines (solid)
+            ax.axhline(y=avg_q2, color='blue', linestyle='-', linewidth=2, alpha=0.7, label=f'Avg Q2/Q1 = {avg_q2:.3f}')
+            ax.axhline(y=avg_q3, color='green', linestyle='-', linewidth=2, alpha=0.7, label=f'Avg Q3/Q1 = {avg_q3:.3f}')
+            ax.axhline(y=avg_q4, color='red', linestyle='-', linewidth=2, alpha=0.7, label=f'Avg Q4/Q1 = {avg_q4:.3f}')
+            
+            # Add STD tolerance bands if standard deviations are provided
+            if std_q2 is not None:
+                upper_q2 = avg_q2 + (std_q2 * std_multiplier)
+                lower_q2 = avg_q2 - (std_q2 * std_multiplier)
+                ax.axhline(y=upper_q2, color='blue', linestyle='--', linewidth=1.5, alpha=0.5, label=f'Q2/Q1 +STD ({std_req}%)')
+                ax.axhline(y=lower_q2, color='blue', linestyle='--', linewidth=1.5, alpha=0.5, label=f'Q2/Q1 -STD ({std_req}%)')
+            
+            if std_q3 is not None:
+                upper_q3 = avg_q3 + (std_q3 * std_multiplier)
+                lower_q3 = avg_q3 - (std_q3 * std_multiplier)
+                ax.axhline(y=upper_q3, color='green', linestyle='--', linewidth=1.5, alpha=0.5, label=f'Q3/Q1 +STD ({std_req}%)')
+                ax.axhline(y=lower_q3, color='green', linestyle='--', linewidth=1.5, alpha=0.5, label=f'Q3/Q1 -STD ({std_req}%)')
+            
+            if std_q4 is not None:
+                upper_q4 = avg_q4 + (std_q4 * std_multiplier)
+                lower_q4 = avg_q4 - (std_q4 * std_multiplier)
+                ax.axhline(y=upper_q4, color='red', linestyle='--', linewidth=1.5, alpha=0.5, label=f'Q4/Q1 +STD ({std_req}%)')
+                ax.axhline(y=lower_q4, color='red', linestyle='--', linewidth=1.5, alpha=0.5, label=f'Q4/Q1 -STD ({std_req}%)')
             
             # Add average values as text annotations
-            y_pos = ax.get_ylim()[1] * 0.95
             ax.text(0.02, 0.98, f'Avg Q2/Q1: {avg_q2:.3f}', transform=ax.transAxes, 
                    fontsize=11, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='blue', alpha=0.3))
             ax.text(0.02, 0.90, f'Avg Q3/Q1: {avg_q3:.3f}', transform=ax.transAxes,
@@ -952,8 +995,9 @@ class MainWindow(QMainWindow):
             # Labels and formatting
             ax.set_xlabel('Image Index', fontsize=12, fontweight='bold')
             ax.set_ylabel('Normalized Gray Level Ratio', fontsize=12, fontweight='bold')
-            ax.set_title('Normalized Quadrant Ratios (Q/Q1)', fontsize=14, fontweight='bold')
-            ax.legend(loc='upper right', fontsize=10)
+            title = f'Normalized Quadrant Ratios (Q/Q1) - STD Requirement: {std_req}%'
+            ax.set_title(title, fontsize=14, fontweight='bold')
+            ax.legend(loc='upper left', fontsize=9, ncol=2)
             ax.grid(True, alpha=0.3)
             
             # Set x-axis to show every nth label to avoid crowding
