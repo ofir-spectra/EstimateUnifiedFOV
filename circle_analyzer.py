@@ -530,6 +530,11 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.top_bar_layout.addWidget(self.progress_bar)
 
+        # Status label for showing current file being processed
+        self.status_label = QtLabel("")
+        self.status_label.setStyleSheet("color: #888; font-style: italic; font-size: 10px;")
+        self.top_bar_layout.addWidget(self.status_label)
+
         # Add top bar at the very top
         self.layout.insertWidget(0, self.top_bar)
 
@@ -628,6 +633,30 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", error_msg)
             self.progress_bar.setVisible(False)
     
+    def display_image_in_gui(self, combined_img):
+        """Display an image in the GUI image label.
+        
+        Args:
+            combined_img: numpy array of image in RGB format
+        """
+        h, w, ch = combined_img.shape
+        screen = QApplication.primaryScreen()
+        screen_size = screen.availableGeometry()
+        max_w = int(screen_size.width() * 0.9)
+        max_h = int(screen_size.height() * 0.9)
+        scale = min(max_w / w, max_h / h, 1.0)
+        if scale < 1.0:
+            combined_disp = cv2.resize(combined_img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+            h, w = combined_disp.shape[:2]
+        else:
+            combined_disp = combined_img
+        bytes_per_line = ch * w
+        qimg = QImage(combined_disp.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+        pixmap = QPixmap.fromImage(qimg)
+        self.image_label.setPixmap(pixmap)
+        self.image_label.adjustSize()
+        QApplication.processEvents()
+    
     def process_folder(self):
         from PyQt6.QtWidgets import QFileDialog, QMessageBox, QListWidget, QDialog, QVBoxLayout, QPushButton, QLabel
         import os
@@ -643,10 +672,13 @@ class MainWindow(QMainWindow):
         self.last_folder_path = main_folder
         self.save_settings()
         # Step 2: Check for images in main folder
-        # First try *-e-00-org.png pattern, then fall back to *-00-org.png
-        image_files = [f for f in os.listdir(main_folder) if f.lower().endswith('-e-00-org.png')]
-        if not image_files:
-            image_files = [f for f in os.listdir(main_folder) if f.lower().endswith('-00-org.png')]
+        # Collect all variants: -g-00-org.png, -e-00-org.png, and -00-org.png
+        # Process each variant separately (not as fallback)
+        g_files = [f for f in os.listdir(main_folder) if f.lower().endswith('-g-00-org.png')]
+        e_files = [f for f in os.listdir(main_folder) if f.lower().endswith('-e-00-org.png')]
+        # For default, exclude files that are already g or e variants
+        default_files = [f for f in os.listdir(main_folder) if f.lower().endswith('-00-org.png') and not f.lower().endswith('-g-00-org.png') and not f.lower().endswith('-e-00-org.png')]
+        image_files = g_files + e_files + default_files
         subfolders = [os.path.join(main_folder, d) for d in os.listdir(main_folder) if os.path.isdir(os.path.join(main_folder, d))]
         folders = []
         if image_files:
@@ -738,22 +770,29 @@ class MainWindow(QMainWindow):
                 # Add original image job
                 jobs.append((folder, fname, getattr(self, 'rgb_threshold', 16), getattr(self, 'gl_radius_multiplier', 0.5), output_dir, False))
                 
-                # Determine base filename from original (handle both -e-00-org.png and -00-org.png)
-                if fname.lower().endswith('-e-00-org.png'):
+                # Determine base filename and variant from original
+                # Variants: -g-00-org.png, -e-00-org.png, or -00-org.png
+                if fname.lower().endswith('-g-00-org.png'):
+                    base_fname = fname.replace('-g-00-org.png', '', 1)
+                    variant = 'g'
+                elif fname.lower().endswith('-e-00-org.png'):
                     base_fname = fname.replace('-e-00-org.png', '', 1)
+                    variant = 'e'
                 else:
                     base_fname = fname.replace('-00-org.png', '', 1)
+                    variant = 'default'
                 
-                # Check for calibrated version (try -e-00-lsc-ccm.png first, then -00-lsc-ccm.png)
-                cal_fname_primary = f"{base_fname}-e-00-lsc-ccm.png"
-                cal_fname_fallback = f"{base_fname}-00-lsc-ccm.png"
-                cal_path_primary = os.path.join(folder, cal_fname_primary)
-                cal_path_fallback = os.path.join(folder, cal_fname_fallback)
+                # Check for calibrated version matching the same variant
+                if variant == 'g':
+                    cal_fname = f"{base_fname}-g-00-lsc-ccm.png"
+                elif variant == 'e':
+                    cal_fname = f"{base_fname}-e-00-lsc-ccm.png"
+                else:
+                    cal_fname = f"{base_fname}-00-lsc-ccm.png"
                 
-                if os.path.exists(cal_path_primary):
-                    jobs.append((folder, cal_fname_primary, getattr(self, 'rgb_threshold', 16), getattr(self, 'gl_radius_multiplier', 0.5), output_dir, True))
-                elif os.path.exists(cal_path_fallback):
-                    jobs.append((folder, cal_fname_fallback, getattr(self, 'rgb_threshold', 16), getattr(self, 'gl_radius_multiplier', 0.5), output_dir, True))
+                cal_path = os.path.join(folder, cal_fname)
+                if os.path.exists(cal_path):
+                    jobs.append((folder, cal_fname, getattr(self, 'rgb_threshold', 16), getattr(self, 'gl_radius_multiplier', 0.5), output_dir, True))
         
         print(f"\nStarting processing of {len(jobs)} images (original + calibrated)...")
 
@@ -774,12 +813,13 @@ class MainWindow(QMainWindow):
                 # Update progress bar in real-time
                 processed += 1
                 self.progress_bar.setValue(processed)
+                self.status_label.setText(f"Processing: {job[1]} ({processed}/{len(jobs)})")
                 QApplication.processEvents()
                 print(f"  Processed {processed}/{len(jobs)}: {job[1]}")
 
-        # Group results by original filename
+        # Group results by original filename and variant
         processed = 0
-        image_pairs = {}  # key: base filename, value: {'org': result, 'cal': result}
+        image_pairs = {}  # key: (base_filename, variant), value: {'org': result, 'cal': result}
         
         for (folder, fname, rgb_threshold, gl_radius_multiplier, output_dir, is_calibrated), result in results:
             if result is None:
@@ -789,32 +829,45 @@ class MainWindow(QMainWindow):
                 QApplication.processEvents()
                 continue
             
-            # Determine base filename from either pattern
+            # Determine base filename and variant from either pattern
             if is_calibrated:
-                # Handle calibrated: try -e-00-lsc-ccm.png first, then -00-lsc-ccm.png
-                if fname.lower().endswith('-e-00-lsc-ccm.png'):
+                # Handle calibrated: identify variant from suffix
+                if fname.lower().endswith('-g-00-lsc-ccm.png'):
+                    base_fname = fname.replace('-g-00-lsc-ccm.png', '', 1)
+                    variant = 'g'
+                elif fname.lower().endswith('-e-00-lsc-ccm.png'):
                     base_fname = fname.replace('-e-00-lsc-ccm.png', '', 1)
+                    variant = 'e'
                 else:
                     base_fname = fname.replace('-00-lsc-ccm.png', '', 1)
+                    variant = 'default'
             else:
-                # Handle original: try -e-00-org.png first, then -00-org.png
-                if fname.lower().endswith('-e-00-org.png'):
+                # Handle original: identify variant from suffix
+                if fname.lower().endswith('-g-00-org.png'):
+                    base_fname = fname.replace('-g-00-org.png', '', 1)
+                    variant = 'g'
+                elif fname.lower().endswith('-e-00-org.png'):
                     base_fname = fname.replace('-e-00-org.png', '', 1)
+                    variant = 'e'
                 else:
                     base_fname = fname.replace('-00-org.png', '', 1)
+                    variant = 'default'
             
-            if base_fname not in image_pairs:
-                image_pairs[base_fname] = {}
+            # Use (base_filename, variant) as key to separate g, e, and default variants
+            key = (base_fname, variant)
+            if key not in image_pairs:
+                image_pairs[key] = {}
             
-            image_pairs[base_fname]['cal' if is_calibrated else 'org'] = {
+            image_pairs[key]['cal' if is_calibrated else 'org'] = {
                 'folder': folder,
                 'fname': fname,
                 'output_dir': output_dir,
                 'result': result
             }
         
-        # Process each image pair
-        for base_fname, images in image_pairs.items():
+        # Process each image pair (now including variants g, e, and default)
+        for key, images in image_pairs.items():
+            base_fname, variant = key  # Unpack (base_filename, variant) tuple
             for image_type, data in images.items():
                 if data is None:
                     continue
@@ -851,23 +904,7 @@ class MainWindow(QMainWindow):
                 cv2.putText(overlay_rgb_disp, overlay_text, (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (255,255,255), 5, cv2.LINE_AA)
 
                 # --- Display the combined overlay in the GUI ---
-                h, w, ch = combined.shape
-                screen = QApplication.primaryScreen()
-                screen_size = screen.availableGeometry()
-                max_w = int(screen_size.width() * 0.9)
-                max_h = int(screen_size.height() * 0.9)
-                scale = min(max_w / w, max_h / h, 1.0)
-                if scale < 1.0:
-                    combined_disp = cv2.resize(combined, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-                    h, w = combined_disp.shape[:2]
-                else:
-                    combined_disp = combined
-                bytes_per_line = ch * w
-                qimg = QImage(combined_disp.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-                pixmap = QPixmap.fromImage(qimg)
-                self.image_label.setPixmap(pixmap)
-                self.image_label.adjustSize()
-                QApplication.processEvents()
+                self.display_image_in_gui(combined)
 
                 # Store results for CSV writing (will be merged later)
                 data['csv_ready'] = {
@@ -1255,11 +1292,11 @@ class MainWindow(QMainWindow):
             std_multiplier = std_req / 100.0
             
             # Plot original data
-            ax.plot(x, norm_data, color=color, linestyle='-', marker='o', label=f'{ratio_name} (Org)', linewidth=2, markersize=5)
+            line_org = ax.plot(x, norm_data, color=color, linestyle='-', marker='o', label=f'{ratio_name} (Org)', linewidth=2, markersize=5)
             
             # Plot calibrated data if available
             if norm_data_cal is not None:
-                ax.plot(x, norm_data_cal, color=color, linestyle='--', marker='s', label=f'{ratio_name} (Cal)', linewidth=2, markersize=5, alpha=0.7)
+                line_cal = ax.plot(x, norm_data_cal, color=color, linestyle='--', marker='s', label=f'{ratio_name} (Cal)', linewidth=2, markersize=5, alpha=0.7)
             
             # Add horizontal average lines (Original - solid)
             ax.axhline(y=avg_val, color=color, linestyle='-', linewidth=2.5, alpha=0.8, label=f'Avg (Org): {avg_val:.3f}')
@@ -1306,6 +1343,30 @@ class MainWindow(QMainWindow):
             ax.set_xticks(x[::step])
             ax.set_xticklabels([f"{i}" for i in range(0, len(filenames), step)], fontsize=9)
             
+            # Add interactive tooltips with filenames
+            try:
+                import mplcursors
+                # Create tooltip annotations for original data
+                annotations_org = []
+                for i, (xi, yi) in enumerate(zip(x, norm_data)):
+                    annotations_org.append(f"Index {i}\n{filenames[i]}\nValue: {yi:.4f}")
+                
+                cursor_org = mplcursors.cursor(line_org[0], hover=True)
+                cursor_org.connect("add", lambda sel: sel.annotation.set_text(
+                    annotations_org[int(sel.index)] if int(sel.index) < len(annotations_org) else "N/A"))
+                
+                # Create tooltip annotations for calibrated data if available
+                if norm_data_cal is not None:
+                    annotations_cal = []
+                    for i, (xi, yi) in enumerate(zip(x, norm_data_cal)):
+                        annotations_cal.append(f"Index {i}\n{filenames[i]} (Cal)\nValue: {yi:.4f}")
+                    
+                    cursor_cal = mplcursors.cursor(line_cal[0], hover=True)
+                    cursor_cal.connect("add", lambda sel: sel.annotation.set_text(
+                        annotations_cal[int(sel.index)] if int(sel.index) < len(annotations_cal) else "N/A"))
+            except ImportError:
+                print("mplcursors not installed - tooltips unavailable. Install with: pip install mplcursors")
+            
             plt.tight_layout()
             plt.show()
             
@@ -1340,15 +1401,15 @@ class MainWindow(QMainWindow):
             std_multiplier = std_req / 100.0  # Convert percentage to multiplier
             
             # Plot the three normalized ratio curves with markers (Original)
-            ax.plot(x, norm_q2, 'b-o', label='Q2/Q1 (Org)', linewidth=2, markersize=4)
-            ax.plot(x, norm_q3, 'g-s', label='Q3/Q1 (Org)', linewidth=2, markersize=4)
-            ax.plot(x, norm_q4, 'r-^', label='Q4/Q1 (Org)', linewidth=2, markersize=4)
+            line_q2 = ax.plot(x, norm_q2, 'b-o', label='Q2/Q1 (Org)', linewidth=2, markersize=4)
+            line_q3 = ax.plot(x, norm_q3, 'g-s', label='Q3/Q1 (Org)', linewidth=2, markersize=4)
+            line_q4 = ax.plot(x, norm_q4, 'r-^', label='Q4/Q1 (Org)', linewidth=2, markersize=4)
             
             # Plot calibrated curves if available
             if norm_q2_cal is not None:
-                ax.plot(x, norm_q2_cal, 'b--d', label='Q2/Q1 (Cal)', linewidth=2, markersize=4, alpha=0.7)
-                ax.plot(x, norm_q3_cal, 'g--x', label='Q3/Q1 (Cal)', linewidth=2, markersize=4, alpha=0.7)
-                ax.plot(x, norm_q4_cal, 'r--+', label='Q4/Q1 (Cal)', linewidth=2, markersize=4, alpha=0.7)
+                line_q2_cal = ax.plot(x, norm_q2_cal, 'b--d', label='Q2/Q1 (Cal)', linewidth=2, markersize=4, alpha=0.7)
+                line_q3_cal = ax.plot(x, norm_q3_cal, 'g--x', label='Q3/Q1 (Cal)', linewidth=2, markersize=4, alpha=0.7)
+                line_q4_cal = ax.plot(x, norm_q4_cal, 'r--+', label='Q4/Q1 (Cal)', linewidth=2, markersize=4, alpha=0.7)
             
             # Add horizontal average lines (Original - solid)
             ax.axhline(y=avg_q2, color='blue', linestyle='-', linewidth=2, alpha=0.7, label=f'Avg Q2/Q1 (Org): {avg_q2:.3f}')
@@ -1409,6 +1470,58 @@ class MainWindow(QMainWindow):
             ax.set_xticks(x[::step])
             ax.set_xticklabels([f"{i}" for i in range(0, len(filenames), step)], fontsize=9)
             
+            # Add interactive tooltips with filenames
+            try:
+                import mplcursors
+                # Create tooltip annotations for Q2/Q1
+                annotations_q2 = []
+                for i, (xi, yi) in enumerate(zip(x, norm_q2)):
+                    annotations_q2.append(f"Index {i}\n{filenames[i]}\nQ2/Q1: {yi:.4f}")
+                cursor_q2 = mplcursors.cursor(line_q2[0], hover=True)
+                cursor_q2.connect("add", lambda sel: sel.annotation.set_text(
+                    annotations_q2[int(sel.index)] if int(sel.index) < len(annotations_q2) else "N/A"))
+                
+                # Create tooltip annotations for Q3/Q1
+                annotations_q3 = []
+                for i, (xi, yi) in enumerate(zip(x, norm_q3)):
+                    annotations_q3.append(f"Index {i}\n{filenames[i]}\nQ3/Q1: {yi:.4f}")
+                cursor_q3 = mplcursors.cursor(line_q3[0], hover=True)
+                cursor_q3.connect("add", lambda sel: sel.annotation.set_text(
+                    annotations_q3[int(sel.index)] if int(sel.index) < len(annotations_q3) else "N/A"))
+                
+                # Create tooltip annotations for Q4/Q1
+                annotations_q4 = []
+                for i, (xi, yi) in enumerate(zip(x, norm_q4)):
+                    annotations_q4.append(f"Index {i}\n{filenames[i]}\nQ4/Q1: {yi:.4f}")
+                cursor_q4 = mplcursors.cursor(line_q4[0], hover=True)
+                cursor_q4.connect("add", lambda sel: sel.annotation.set_text(
+                    annotations_q4[int(sel.index)] if int(sel.index) < len(annotations_q4) else "N/A"))
+                
+                # Add tooltips for calibrated curves if available
+                if norm_q2_cal is not None:
+                    annotations_q2_cal = []
+                    for i, (xi, yi) in enumerate(zip(x, norm_q2_cal)):
+                        annotations_q2_cal.append(f"Index {i}\n{filenames[i]} (Cal)\nQ2/Q1: {yi:.4f}")
+                    cursor_q2_cal = mplcursors.cursor(line_q2_cal[0], hover=True)
+                    cursor_q2_cal.connect("add", lambda sel: sel.annotation.set_text(
+                        annotations_q2_cal[int(sel.index)] if int(sel.index) < len(annotations_q2_cal) else "N/A"))
+                    
+                    annotations_q3_cal = []
+                    for i, (xi, yi) in enumerate(zip(x, norm_q3_cal)):
+                        annotations_q3_cal.append(f"Index {i}\n{filenames[i]} (Cal)\nQ3/Q1: {yi:.4f}")
+                    cursor_q3_cal = mplcursors.cursor(line_q3_cal[0], hover=True)
+                    cursor_q3_cal.connect("add", lambda sel: sel.annotation.set_text(
+                        annotations_q3_cal[int(sel.index)] if int(sel.index) < len(annotations_q3_cal) else "N/A"))
+                    
+                    annotations_q4_cal = []
+                    for i, (xi, yi) in enumerate(zip(x, norm_q4_cal)):
+                        annotations_q4_cal.append(f"Index {i}\n{filenames[i]} (Cal)\nQ4/Q1: {yi:.4f}")
+                    cursor_q4_cal = mplcursors.cursor(line_q4_cal[0], hover=True)
+                    cursor_q4_cal.connect("add", lambda sel: sel.annotation.set_text(
+                        annotations_q4_cal[int(sel.index)] if int(sel.index) < len(annotations_q4_cal) else "N/A"))
+            except ImportError:
+                print("mplcursors not installed - tooltips unavailable. Install with: pip install mplcursors")
+            
             plt.tight_layout()
             plt.show()
             
@@ -1434,13 +1547,13 @@ class MainWindow(QMainWindow):
             x = np.arange(len(filenames))
             
             # Left plot: Avg GL Q1 vs Image Index
-            ax1.plot(x, q1_vals, 'b-o', linewidth=2, markersize=5, label='Avg GL Q1 (Org)')
+            line_q1 = ax1.plot(x, q1_vals, 'b-o', linewidth=2, markersize=5, label='Avg GL Q1 (Org)')
             avg_q1 = np.mean(q1_vals)
             ax1.axhline(y=avg_q1, color='blue', linestyle='--', linewidth=2, alpha=0.7, label=f'Avg (Org): {avg_q1:.1f}')
             
             # Plot calibrated data if available
             if q1_vals_cal is not None:
-                ax1.plot(x, q1_vals_cal, 'r-s', linewidth=2, markersize=5, label='Avg GL Q1 (Cal)')
+                line_q1_cal = ax1.plot(x, q1_vals_cal, 'r-s', linewidth=2, markersize=5, label='Avg GL Q1 (Cal)')
                 avg_q1_cal = np.mean(q1_vals_cal)
                 ax1.axhline(y=avg_q1_cal, color='red', linestyle='--', linewidth=2, alpha=0.7, label=f'Avg (Cal): {avg_q1_cal:.1f}')
             
@@ -1455,6 +1568,28 @@ class MainWindow(QMainWindow):
             step = max(1, len(filenames) // 15)
             ax1.set_xticks(x[::step])
             ax1.set_xticklabels([f"{i}" for i in range(0, len(filenames), step)], fontsize=9)
+            
+            # Add interactive tooltips with filenames for left plot
+            try:
+                import mplcursors
+                # Create tooltip annotations for original
+                annotations_q1 = []
+                for i, (xi, yi) in enumerate(zip(x, q1_vals)):
+                    annotations_q1.append(f"Index {i}\n{filenames[i]}\nAvg GL Q1: {yi:.1f}")
+                cursor_q1 = mplcursors.cursor(line_q1[0], hover=True)
+                cursor_q1.connect("add", lambda sel: sel.annotation.set_text(
+                    annotations_q1[int(sel.index)] if int(sel.index) < len(annotations_q1) else "N/A"))
+                
+                # Create tooltip annotations for calibrated
+                if q1_vals_cal is not None:
+                    annotations_q1_cal = []
+                    for i, (xi, yi) in enumerate(zip(x, q1_vals_cal)):
+                        annotations_q1_cal.append(f"Index {i}\n{filenames[i]} (Cal)\nAvg GL Q1: {yi:.1f}")
+                    cursor_q1_cal = mplcursors.cursor(line_q1_cal[0], hover=True)
+                    cursor_q1_cal.connect("add", lambda sel: sel.annotation.set_text(
+                        annotations_q1_cal[int(sel.index)] if int(sel.index) < len(annotations_q1_cal) else "N/A"))
+            except ImportError:
+                print("mplcursors not installed - tooltips unavailable. Install with: pip install mplcursors")
             
             # Right plot: Histogram of Avg GL Q1
             ax2.hist(q1_vals, bins=20, color='blue', edgecolor='black', alpha=0.6, label='Original')
