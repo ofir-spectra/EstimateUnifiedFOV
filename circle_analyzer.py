@@ -725,14 +725,29 @@ class MainWindow(QMainWindow):
         self.last_folder_path = main_folder
         self.save_settings()
         # Step 2: Check for images in main folder
-        # Collect all variants: -g-00-org.png, -e-00-org.png, and -00-org.png
-        # Process each variant separately (not as fallback)
+        # Collect variants with fallback logic: g and e first, default only if no g/e exist
         import re
         g_files = [f for f in os.listdir(main_folder) if f.lower().endswith('-g-00-org.png')]
         e_files = [f for f in os.listdir(main_folder) if f.lower().endswith('-e-00-org.png')]
-        # For default, only match files where -00-org.png is preceded by a digit (not a letter)
-        # Pattern: ends with digit-00-org.png (e.g., _0001-00-org.png, not -k-00-org.png)
-        default_files = [f for f in os.listdir(main_folder) if re.search(r'\d-00-org\.png$', f.lower())]
+        
+        # Extract base filenames from g and e variants
+        variant_bases = set()
+        for f in g_files:
+            variant_bases.add(f.replace('-g-00-org.png', '').replace('-G-00-ORG.PNG', ''))
+        for f in e_files:
+            variant_bases.add(f.replace('-e-00-org.png', '').replace('-E-00-ORG.PNG', ''))
+        
+        # For default, only match files where:
+        # 1. -00-org.png is preceded by a digit (not a letter like k, t, x)
+        # 2. Base filename doesn't already have a g or e variant (fallback logic)
+        default_files = []
+        for f in os.listdir(main_folder):
+            if re.search(r'\d-00-org\.png$', f.lower()):
+                # Extract base filename for this default file
+                base = re.sub(r'-00-org\.png$', '', f, flags=re.IGNORECASE)
+                if base not in variant_bases:
+                    default_files.append(f)
+        
         image_files = g_files + e_files + default_files
         subfolders = [os.path.join(main_folder, d) for d in os.listdir(main_folder) if os.path.isdir(os.path.join(main_folder, d))]
         folders = []
@@ -778,11 +793,28 @@ class MainWindow(QMainWindow):
         for folder in folders:
             import re
             all_images = [f for f in os.listdir(folder) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))]
-            # Collect all variants separately: -g-00-org.png, -e-00-org.png, and digit-00-org.png
+            # Collect variants with fallback logic: g and e first, default only if no g/e exist
             g_files = [f for f in all_images if f.lower().endswith('-g-00-org.png')]
             e_files = [f for f in all_images if f.lower().endswith('-e-00-org.png')]
-            # For default, only match files where -00-org.png is preceded by a digit (not a letter like k, t, x, etc)
-            default_files = [f for f in all_images if re.search(r'\d-00-org\.png$', f.lower())]
+            
+            # Extract base filenames from g and e variants
+            variant_bases = set()
+            for f in g_files:
+                variant_bases.add(f.replace('-g-00-org.png', '').replace('-G-00-ORG.PNG', ''))
+            for f in e_files:
+                variant_bases.add(f.replace('-e-00-org.png', '').replace('-E-00-ORG.PNG', ''))
+            
+            # For default, only match files where:
+            # 1. -00-org.png is preceded by a digit (not a letter like k, t, x, etc)
+            # 2. Base filename doesn't already have a g or e variant (fallback logic)
+            default_files = []
+            for f in all_images:
+                if re.search(r'\d-00-org\.png$', f.lower()):
+                    # Extract base filename for this default file
+                    base = re.sub(r'-00-org\.png$', '', f, flags=re.IGNORECASE)
+                    if base not in variant_bases:
+                        default_files.append(f)
+            
             image_files = g_files + e_files + default_files
             print(f"Processing folder: {folder} ({len(image_files)} images: {len(g_files)} g, {len(e_files)} e, {len(default_files)} default)")
             if len(image_files) > 0:
