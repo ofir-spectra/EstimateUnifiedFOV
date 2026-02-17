@@ -633,6 +633,50 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", error_msg)
             self.progress_bar.setVisible(False)
     
+    def display_result_overlay(self, folder, fname, output_dir, result):
+        """Process and display a single image result overlay.
+        
+        Args:
+            folder: folder path
+            fname: filename
+            output_dir: output directory
+            result: tuple from process_one_image containing (folder, fname, overlay, overlap_img, radii, d1, d2, percent_usage, avg_gray_levels)
+        """
+        import os
+        if result is None:
+            return
+        
+        try:
+            folder, fname, overlay, overlap_img, radii, ellipsoid_d1, ellipsoid_d2, percent_usage, avg_gray_levels = result
+            overlay_rgb = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
+            
+            if overlap_img is not None:
+                left_img = overlay_rgb.copy()
+                right_img = overlap_img.copy()
+                lh = left_img.shape[0]
+                rh = right_img.shape[0]
+                target_h = min(lh, rh)
+                if lh != target_h:
+                    scale = target_h / lh
+                    lw = int(left_img.shape[1] * scale)
+                    left_img = cv2.resize(left_img, (lw, target_h), interpolation=cv2.INTER_AREA)
+                if rh != target_h:
+                    scale = target_h / rh
+                    rw = int(right_img.shape[1] * scale)
+                    right_img = cv2.resize(right_img, (rw, target_h), interpolation=cv2.INTER_AREA)
+                combined = np.hstack([left_img, right_img])
+            else:
+                combined = overlay_rgb
+            
+            out_img_path = os.path.join(output_dir, os.path.splitext(fname)[0] + "_overlay.png")
+            cv2.imwrite(out_img_path, cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
+            print(f"  [SAVED] {out_img_path}")
+            
+            # Display the combined overlay in the GUI immediately
+            self.display_image_in_gui(combined)
+        except Exception as e:
+            print(f"  [ERROR] Failed to display {fname}: {e}")
+    
     def display_image_in_gui(self, combined_img):
         """Display an image in the GUI image label.
         
@@ -810,20 +854,23 @@ class MainWindow(QMainWindow):
             future_to_idx = {executor.submit(process_one_image, job[0], job[1], job[2], job[3]): (i, job) for i, job in enumerate(jobs)}
             for future in concurrent.futures.as_completed(future_to_idx):
                 i, job = future_to_idx[future]
+                folder, fname, rgb_threshold, gl_radius_multiplier, output_dir, is_calibrated = job
                 try:
                     result = future.result()
                     results[i] = (job, result)
+                    # Display overlay immediately after processing completes
+                    self.display_result_overlay(folder, fname, output_dir, result)
                 except Exception as e:
-                    print(f"  [ERROR] Failed to process {job[1]}: {e}")
+                    print(f"  [ERROR] Failed to process {fname}: {e}")
                     import traceback
                     traceback.print_exc()
                     results[i] = (job, None)
                 # Update progress bar in real-time
                 processed += 1
                 self.progress_bar.setValue(processed)
-                self.status_label.setText(f"Processing: {job[1]} ({processed}/{len(jobs)})")
+                self.status_label.setText(f"Processing: {fname} ({processed}/{len(jobs)})")
                 QApplication.processEvents()
-                print(f"  Processed {processed}/{len(jobs)}: {job[1]}")
+                print(f"  Processed {processed}/{len(jobs)}: {fname}")
 
         # Group results by original filename and variant
         processed = 0
@@ -882,47 +929,20 @@ class MainWindow(QMainWindow):
         print(f"  E variant: {e_count}")
         print(f"  Default variant: {d_count}")
         # Process each image pair (now including variants g, e, and default)
+        # Extract CSV data from results (overlays already displayed in real-time above)
         for key, images in image_pairs.items():
             base_fname, variant = key  # Unpack (base_filename, variant) tuple
             for image_type, data in images.items():
                 if data is None:
                     continue
                 
-                folder = data['folder']
-                fname = data['fname']
-                output_dir = data['output_dir']
                 result = data['result']
+                if result is None:
+                    continue
                 
                 folder, fname, overlay, overlap_img, radii, ellipsoid_d1, ellipsoid_d2, percent_usage, avg_gray_levels = result
-                overlay_rgb = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
-                if overlap_img is not None:
-                    left_img = overlay_rgb.copy()
-                    right_img = overlap_img.copy()
-                    lh = left_img.shape[0]
-                    rh = right_img.shape[0]
-                    target_h = min(lh, rh)
-                    if lh != target_h:
-                        scale = target_h / lh
-                        lw = int(left_img.shape[1] * scale)
-                        left_img = cv2.resize(left_img, (lw, target_h), interpolation=cv2.INTER_AREA)
-                    if rh != target_h:
-                        scale = target_h / rh
-                        rw = int(right_img.shape[1] * scale)
-                        right_img = cv2.resize(right_img, (rw, target_h), interpolation=cv2.INTER_AREA)
-                    combined = np.hstack([left_img, right_img])
-                else:
-                    combined = overlay_rgb
-                out_img_path = os.path.join(output_dir, os.path.splitext(fname)[0] + "_overlay.png")
-                cv2.imwrite(out_img_path, cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
-                print(f"  [SAVED] {out_img_path}")
-                overlay_text = f"Sensor Usage: {percent_usage:.1f}%" if percent_usage is not None else "Sensor Usage: N/A"
-                overlay_rgb_disp = overlay_rgb.copy()
-                cv2.putText(overlay_rgb_disp, overlay_text, (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (255,255,255), 5, cv2.LINE_AA)
-
-                # --- Display the combined overlay in the GUI ---
-                self.display_image_in_gui(combined)
-
-                # Store results for CSV writing (will be merged later)
+                
+                # Store results for CSV writing
                 data['csv_ready'] = {
                     "r1": radii[0] if 0 < len(radii) else None,
                     "r2": radii[1] if 1 < len(radii) else None,
@@ -936,10 +956,6 @@ class MainWindow(QMainWindow):
                     "Avg. GL Q3": avg_gray_levels[2] if len(avg_gray_levels) > 2 else None,
                     "Avg. GL Q4": avg_gray_levels[3] if len(avg_gray_levels) > 3 else None,
                 }
-                
-                processed += 1
-                self.progress_bar.setValue(processed)
-                QApplication.processEvents()
         
         # Write results to CSV
         for base_fname, images in image_pairs.items():
