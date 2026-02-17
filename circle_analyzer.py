@@ -718,10 +718,12 @@ class MainWindow(QMainWindow):
         # Step 2: Check for images in main folder
         # Collect all variants: -g-00-org.png, -e-00-org.png, and -00-org.png
         # Process each variant separately (not as fallback)
+        import re
         g_files = [f for f in os.listdir(main_folder) if f.lower().endswith('-g-00-org.png')]
         e_files = [f for f in os.listdir(main_folder) if f.lower().endswith('-e-00-org.png')]
-        # For default, exclude files that are already g or e variants
-        default_files = [f for f in os.listdir(main_folder) if f.lower().endswith('-00-org.png') and not f.lower().endswith('-g-00-org.png') and not f.lower().endswith('-e-00-org.png')]
+        # For default, only match files where -00-org.png is preceded by a digit (not a letter)
+        # Pattern: ends with digit-00-org.png (e.g., _0001-00-org.png, not -k-00-org.png)
+        default_files = [f for f in os.listdir(main_folder) if re.search(r'\d-00-org\.png$', f.lower())]
         image_files = g_files + e_files + default_files
         subfolders = [os.path.join(main_folder, d) for d in os.listdir(main_folder) if os.path.isdir(os.path.join(main_folder, d))]
         folders = []
@@ -765,11 +767,13 @@ class MainWindow(QMainWindow):
         total_images = 0
         folder_image_lists = []
         for folder in folders:
+            import re
             all_images = [f for f in os.listdir(folder) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))]
-            # Collect all variants separately: -g-00-org.png, -e-00-org.png, and -00-org.png
+            # Collect all variants separately: -g-00-org.png, -e-00-org.png, and digit-00-org.png
             g_files = [f for f in all_images if f.lower().endswith('-g-00-org.png')]
             e_files = [f for f in all_images if f.lower().endswith('-e-00-org.png')]
-            default_files = [f for f in all_images if f.lower().endswith('-00-org.png') and not f.lower().endswith('-g-00-org.png') and not f.lower().endswith('-e-00-org.png')]
+            # For default, only match files where -00-org.png is preceded by a digit (not a letter like k, t, x, etc)
+            default_files = [f for f in all_images if re.search(r'\d-00-org\.png$', f.lower())]
             image_files = g_files + e_files + default_files
             print(f"Processing folder: {folder} ({len(image_files)} images: {len(g_files)} g, {len(e_files)} e, {len(default_files)} default)")
             if len(image_files) > 0:
