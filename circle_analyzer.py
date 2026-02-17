@@ -530,13 +530,22 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.top_bar_layout.addWidget(self.progress_bar)
 
-        # Status label for showing current file being processed
-        self.status_label = QtLabel("")
-        self.status_label.setStyleSheet("color: #888; font-style: italic; font-size: 10px;")
-        self.top_bar_layout.addWidget(self.status_label)
-
         # Add top bar at the very top
         self.layout.insertWidget(0, self.top_bar)
+
+        # Status label for showing current file being processed - prominent center location
+        self.status_label = QtLabel("")
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_label.setStyleSheet("""
+            color: #ffffff;
+            font-size: 16px;
+            font-weight: bold;
+            padding: 10px;
+            background-color: rgba(0, 0, 0, 0.7);
+            border-radius: 5px;
+        """)
+        self.status_label.setVisible(False)
+        self.layout.addWidget(self.status_label)
 
         # Image label inside a scroll area
         self.image_label = QLabel()
@@ -786,6 +795,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, total_images)
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
+        self.status_label.setVisible(True)
         QApplication.processEvents()
         processed = 0
         # Create CSV at the beginning with date_time prefix
@@ -872,7 +882,7 @@ class MainWindow(QMainWindow):
                 # Update progress bar in real-time
                 processed += 1
                 self.progress_bar.setValue(processed)
-                self.status_label.setText(f"Processing: {fname} ({processed}/{len(jobs)})")
+                self.status_label.setText(f"Image {processed} of {len(jobs)}: {fname}")
                 QApplication.processEvents()
                 print(f"  Processed {processed}/{len(jobs)}: {fname}")
 
@@ -1032,9 +1042,11 @@ class MainWindow(QMainWindow):
         finally:
             self.progress_bar.setValue(0)
             self.progress_bar.setVisible(False)
+            self.status_label.setVisible(False)
 
-        # Hide progress bar when done
+        # Hide progress bar and status label when done
         self.progress_bar.setVisible(False)
+        self.status_label.setVisible(False)
 
     def on_threshold_changed(self, value):
         self.rgb_threshold = value
