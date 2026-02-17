@@ -722,11 +722,12 @@ class MainWindow(QMainWindow):
         folder_image_lists = []
         for folder in folders:
             all_images = [f for f in os.listdir(folder) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))]
-            # First try *-e-00-org.png pattern, then fall back to *-00-org.png
-            image_files = [f for f in all_images if f.lower().endswith("-e-00-org.png")]
-            if not image_files:
-                image_files = [f for f in all_images if f.lower().endswith("-00-org.png")]
-            print(f"Processing folder: {folder} ({len(image_files)} images out of {len(all_images)} images)")
+            # Collect all variants separately: -g-00-org.png, -e-00-org.png, and -00-org.png
+            g_files = [f for f in all_images if f.lower().endswith('-g-00-org.png')]
+            e_files = [f for f in all_images if f.lower().endswith('-e-00-org.png')]
+            default_files = [f for f in all_images if f.lower().endswith('-00-org.png') and not f.lower().endswith('-g-00-org.png') and not f.lower().endswith('-e-00-org.png')]
+            image_files = g_files + e_files + default_files
+            print(f"Processing folder: {folder} ({len(image_files)} images: {len(g_files)} g, {len(e_files)} e, {len(default_files)} default)")
             if len(image_files) > 0:
                 print(f"  Sample files: {image_files[:3]}...")
             folder_image_lists.append((folder, image_files))
@@ -795,6 +796,13 @@ class MainWindow(QMainWindow):
                     jobs.append((folder, cal_fname, getattr(self, 'rgb_threshold', 16), getattr(self, 'gl_radius_multiplier', 0.5), output_dir, True))
         
         print(f"\nStarting processing of {len(jobs)} images (original + calibrated)...")
+        print(f"  Job breakdown by variant:")
+        g_jobs = sum(1 for j in jobs if '-g-00-' in j[1])
+        e_jobs = sum(1 for j in jobs if '-e-00-' in j[1])
+        d_jobs = sum(1 for j in jobs if '-g-00-' not in j[1] and '-e-00-' not in j[1])
+        print(f"    G variant: {g_jobs}")
+        print(f"    E variant: {e_jobs}")
+        print(f"    Default variant: {d_jobs}")
 
         results = [None] * len(jobs)
         processed = 0
@@ -865,6 +873,14 @@ class MainWindow(QMainWindow):
                 'result': result
             }
         
+        # Log summary of collected results
+        g_count = sum(1 for k in image_pairs.keys() if k[1] == 'g')
+        e_count = sum(1 for k in image_pairs.keys() if k[1] == 'e')
+        d_count = sum(1 for k in image_pairs.keys() if k[1] == 'default')
+        print(f"\nResults collected by variant:")
+        print(f"  G variant: {g_count}")
+        print(f"  E variant: {e_count}")
+        print(f"  Default variant: {d_count}")
         # Process each image pair (now including variants g, e, and default)
         for key, images in image_pairs.items():
             base_fname, variant = key  # Unpack (base_filename, variant) tuple
