@@ -438,7 +438,15 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Circle Analyzer")
         self.setGeometry(100, 100, 1000, 800)
         self.set_dark_theme()
+        
+        # Settings file path
+        import os
+        self.settings_file = os.path.join(os.path.expanduser("~"), ".circle_analyzer_settings.json")
+        
         self.init_ui()
+        
+        # Load saved settings after UI is initialized
+        self.load_settings()
 
     def set_dark_theme(self):
         palette = QPalette()
@@ -458,6 +466,7 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QScrollArea, QSlider, QLabel as QtLabel, QProgressBar, QComboBox, QDoubleSpinBox
+        import os
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout()
@@ -512,6 +521,7 @@ class MainWindow(QMainWindow):
         self.std_spinbox.setSingleStep(0.1)
         self.std_spinbox.setSuffix(" %")
         self.std_spinbox.setMaximumWidth(80)
+        self.std_spinbox.valueChanged.connect(self.on_std_changed)  # Save when STD changes
         self.top_bar_layout.addWidget(self.std_spinbox)
 
         # Progress bar
@@ -539,6 +549,72 @@ class MainWindow(QMainWindow):
         self.gl_radius_multiplier = 0.5  # Default to 1/2 × r
         # STD requirement percentage
         self.std_requirement = 1.0  # Default 1%
+        # Last folder path
+        self.last_folder_path = os.path.expanduser("~")
+    
+    def load_settings(self):
+        """Load saved settings from JSON file"""
+        import json
+        import os
+        try:
+            if os.path.exists(self.settings_file):
+                with open(self.settings_file, 'r') as f:
+                    settings = json.load(f)
+                
+                # Restore threshold
+                if 'rgb_threshold' in settings:
+                    self.rgb_threshold = settings['rgb_threshold']
+                    self.threshold_slider.setValue(self.rgb_threshold)
+                    self.threshold_label.setText(f"RGB Threshold: {self.rgb_threshold}")
+                
+                # Restore radius multiplier
+                if 'gl_radius_multiplier' in settings:
+                    self.gl_radius_multiplier = settings['gl_radius_multiplier']
+                    # Find and set the combo box index
+                    for i in range(self.radius_combo.count()):
+                        if self.radius_combo.itemData(i) == self.gl_radius_multiplier:
+                            self.radius_combo.setCurrentIndex(i)
+                            break
+                
+                # Restore STD requirement
+                if 'std_requirement' in settings:
+                    self.std_requirement = settings['std_requirement']
+                    self.std_spinbox.setValue(self.std_requirement)
+                
+                # Restore last folder path
+                if 'last_folder_path' in settings:
+                    self.last_folder_path = settings['last_folder_path']
+                
+                # Restore window geometry
+                if 'window_geometry' in settings:
+                    geom = settings['window_geometry']
+                    self.setGeometry(geom['x'], geom['y'], geom['width'], geom['height'])
+                
+                print(f"Settings loaded from {self.settings_file}")
+        except Exception as e:
+            print(f"Could not load settings: {e}")
+    
+    def save_settings(self):
+        """Save current settings to JSON file"""
+        import json
+        try:
+            settings = {
+                'rgb_threshold': self.rgb_threshold,
+                'gl_radius_multiplier': self.gl_radius_multiplier,
+                'std_requirement': self.std_spinbox.value(),
+                'last_folder_path': self.last_folder_path,
+                'window_geometry': {
+                    'x': self.geometry().x(),
+                    'y': self.geometry().y(),
+                    'width': self.geometry().width(),
+                    'height': self.geometry().height()
+                }
+            }
+            with open(self.settings_file, 'w') as f:
+                json.dump(settings, f, indent=2)
+            print(f"Settings saved to {self.settings_file}")
+        except Exception as e:
+            print(f"Could not save settings: {e}")
     
     def process_folder_safe(self):
         """Wrapper to catch and display exceptions from process_folder"""
@@ -559,14 +635,18 @@ class MainWindow(QMainWindow):
         # Custom dialog for multi-folder selection
         from PyQt6.QtWidgets import QDialogButtonBox, QListWidgetItem
         # Step 1: Select main folder
-        main_folder = QFileDialog.getExistingDirectory(self, "Select Main Folder", os.path.expanduser("~"))
+        main_folder = QFileDialog.getExistingDirectory(self, "Select Main Folder", self.last_folder_path)
         if not main_folder:
             return
+        
+        # Save the selected folder path
+        self.last_folder_path = main_folder
+        self.save_settings()
         # Step 2: Check for images in main folder
-        # First try ex*e-00-org.png pattern, then fall back to c*-00-org.png
-        image_files = [f for f in os.listdir(main_folder) if f.lower().endswith('e-00-org.png') and f.lower().startswith('ex')]
+        # First try *-e-00-org.png pattern, then fall back to *-00-org.png
+        image_files = [f for f in os.listdir(main_folder) if f.lower().endswith('-e-00-org.png')]
         if not image_files:
-            image_files = [f for f in os.listdir(main_folder) if f.lower().endswith('-00-org.png')  and f.lower().startswith('c')]
+            image_files = [f for f in os.listdir(main_folder) if f.lower().endswith('-00-org.png')]
         subfolders = [os.path.join(main_folder, d) for d in os.listdir(main_folder) if os.path.isdir(os.path.join(main_folder, d))]
         folders = []
         if image_files:
@@ -610,15 +690,15 @@ class MainWindow(QMainWindow):
         folder_image_lists = []
         for folder in folders:
             all_images = [f for f in os.listdir(folder) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))]
-            # First try ex*e-00-org.png pattern, then fall back to c*-00-org.png
-            image_files = [f for f in all_images if f.lower().endswith("e-00-org.png") and f.lower().startswith('ex')]
+            # First try *-e-00-org.png pattern, then fall back to *-00-org.png
+            image_files = [f for f in all_images if f.lower().endswith("-e-00-org.png")]
             if not image_files:
-                image_files = [f for f in all_images if f.lower().endswith("00-org.png") and f.lower().startswith('c')]
+                image_files = [f for f in all_images if f.lower().endswith("-00-org.png")]
             print(f"Processing folder: {folder} ({len(image_files)} images out of {len(all_images)} images)")
             if len(image_files) > 0:
                 print(f"  Sample files: {image_files[:3]}...")
             folder_image_lists.append((folder, image_files))
-            total_images += len(image_files)
+            total_images += len(image_files) * 2  # Count both original and calibrated (if exist)
         if total_images == 0:
             QMessageBox.warning(self, "No Images", "No image files found in the selected folders.")
             return
@@ -631,7 +711,10 @@ class MainWindow(QMainWindow):
         dt_prefix = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         csv_path = os.path.join(os.getcwd(), f"{dt_prefix}_all_results.csv")
         print(f"CSV will be saved to: {csv_path}")
-        fieldnames = ["folder", "filename", "r1", "r2", "r3", "r4", "d1", "d2", "sensor_usage", "Avg. GL Q1", "Avg. GL Q2", "Avg. GL Q3", "Avg. GL Q4"]
+        fieldnames = ["folder", "filename", "r1", "r2", "r3", "r4", "d1", "d2", "sensor_usage", 
+                     "Avg. GL Q1", "Avg. GL Q2", "Avg. GL Q3", "Avg. GL Q4",
+                     "r1_cal", "r2_cal", "r3_cal", "r4_cal", "d1_cal", "d2_cal", "sensor_usage_cal",
+                     "Avg. GL Q1 (Cal)", "Avg. GL Q2 (Cal)", "Avg. GL Q3 (Cal)", "Avg. GL Q4 (Cal)"]
         with open(csv_path, "w", newline="") as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
@@ -645,16 +728,34 @@ class MainWindow(QMainWindow):
             overlay, overlap_img, radii, overlap_internal_radius, ellipsoid_d1, ellipsoid_d2, percent_usage, avg_gray_levels = self.analyze_and_overlay(img, rgb_threshold, gl_radius_multiplier)
             return (folder, fname, overlay, overlap_img, radii, ellipsoid_d1, ellipsoid_d2, percent_usage, avg_gray_levels)
 
-        # Prepare all jobs
+        # Prepare all jobs - both original and calibrated
         jobs = []
         for folder, image_files in folder_image_lists:
             output_dir = os.path.join(os.getcwd(), os.path.basename(folder) + "_outputs")
             os.makedirs(output_dir, exist_ok=True)
             print(f"Output directory: {output_dir}")
             for fname in image_files:
-                jobs.append((folder, fname, getattr(self, 'rgb_threshold', 16), getattr(self, 'gl_radius_multiplier', 0.5), output_dir))
+                # Add original image job
+                jobs.append((folder, fname, getattr(self, 'rgb_threshold', 16), getattr(self, 'gl_radius_multiplier', 0.5), output_dir, False))
+                
+                # Determine base filename from original (handle both -e-00-org.png and -00-org.png)
+                if fname.lower().endswith('-e-00-org.png'):
+                    base_fname = fname.replace('-e-00-org.png', '', 1)
+                else:
+                    base_fname = fname.replace('-00-org.png', '', 1)
+                
+                # Check for calibrated version (try -e-00-lsc-ccm.png first, then -00-lsc-ccm.png)
+                cal_fname_primary = f"{base_fname}-e-00-lsc-ccm.png"
+                cal_fname_fallback = f"{base_fname}-00-lsc-ccm.png"
+                cal_path_primary = os.path.join(folder, cal_fname_primary)
+                cal_path_fallback = os.path.join(folder, cal_fname_fallback)
+                
+                if os.path.exists(cal_path_primary):
+                    jobs.append((folder, cal_fname_primary, getattr(self, 'rgb_threshold', 16), getattr(self, 'gl_radius_multiplier', 0.5), output_dir, True))
+                elif os.path.exists(cal_path_fallback):
+                    jobs.append((folder, cal_fname_fallback, getattr(self, 'rgb_threshold', 16), getattr(self, 'gl_radius_multiplier', 0.5), output_dir, True))
         
-        print(f"\nStarting processing of {len(jobs)} images...")
+        print(f"\nStarting processing of {len(jobs)} images (original + calibrated)...")
 
         results = [None] * len(jobs)
         processed = 0
@@ -676,78 +777,163 @@ class MainWindow(QMainWindow):
                 QApplication.processEvents()
                 print(f"  Processed {processed}/{len(jobs)}: {job[1]}")
 
+        # Group results by original filename
         processed = 0
-        for (folder, fname, rgb_threshold, gl_radius_multiplier, output_dir), result in results:
+        image_pairs = {}  # key: base filename, value: {'org': result, 'cal': result}
+        
+        for (folder, fname, rgb_threshold, gl_radius_multiplier, output_dir, is_calibrated), result in results:
             if result is None:
                 print(f"  [SKIP] Could not load image: {os.path.join(folder, fname)}")
                 processed += 1
                 self.progress_bar.setValue(processed)
                 QApplication.processEvents()
                 continue
-            folder, fname, overlay, overlap_img, radii, ellipsoid_d1, ellipsoid_d2, percent_usage, avg_gray_levels = result
-            overlay_rgb = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
-            if overlap_img is not None:
-                left_img = overlay_rgb.copy()
-                right_img = overlap_img.copy()
-                lh = left_img.shape[0]
-                rh = right_img.shape[0]
-                target_h = min(lh, rh)
-                if lh != target_h:
-                    scale = target_h / lh
-                    lw = int(left_img.shape[1] * scale)
-                    left_img = cv2.resize(left_img, (lw, target_h), interpolation=cv2.INTER_AREA)
-                if rh != target_h:
-                    scale = target_h / rh
-                    rw = int(right_img.shape[1] * scale)
-                    right_img = cv2.resize(right_img, (rw, target_h), interpolation=cv2.INTER_AREA)
-                combined = np.hstack([left_img, right_img])
+            
+            # Determine base filename from either pattern
+            if is_calibrated:
+                # Handle calibrated: try -e-00-lsc-ccm.png first, then -00-lsc-ccm.png
+                if fname.lower().endswith('-e-00-lsc-ccm.png'):
+                    base_fname = fname.replace('-e-00-lsc-ccm.png', '', 1)
+                else:
+                    base_fname = fname.replace('-00-lsc-ccm.png', '', 1)
             else:
-                combined = overlay_rgb
-            out_img_path = os.path.join(output_dir, os.path.splitext(fname)[0] + "_overlay.png")
-            cv2.imwrite(out_img_path, cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
-            print(f"  [SAVED] {out_img_path}")
-            overlay_text = f"Sensor Usage: {percent_usage:.1f}%" if percent_usage is not None else "Sensor Usage: N/A"
-            overlay_rgb_disp = overlay_rgb.copy()
-            cv2.putText(overlay_rgb_disp, overlay_text, (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (255,255,255), 5, cv2.LINE_AA)
-
-            # --- Display the combined overlay in the GUI ---
-            h, w, ch = combined.shape
-            screen = QApplication.primaryScreen()
-            screen_size = screen.availableGeometry()
-            max_w = int(screen_size.width() * 0.9)
-            max_h = int(screen_size.height() * 0.9)
-            scale = min(max_w / w, max_h / h, 1.0)
-            if scale < 1.0:
-                combined_disp = cv2.resize(combined, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-                h, w = combined_disp.shape[:2]
-            else:
-                combined_disp = combined
-            bytes_per_line = ch * w
-            qimg = QImage(combined_disp.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-            pixmap = QPixmap.fromImage(qimg)
-            self.image_label.setPixmap(pixmap)
-            self.image_label.adjustSize()
-            QApplication.processEvents()
-
-            result_row = {
-                "folder": os.path.basename(folder),
-                "filename": fname,
-                **{f"r{i+1}": radii[i] if i < len(radii) else None for i in range(4)},
-                "d1": ellipsoid_d1,
-                "d2": ellipsoid_d2,
-                "sensor_usage": f"{percent_usage:.1f}" if percent_usage is not None else "",
-                "Avg. GL Q1": avg_gray_levels[0] if len(avg_gray_levels) > 0 else None,
-                "Avg. GL Q2": avg_gray_levels[1] if len(avg_gray_levels) > 1 else None,
-                "Avg. GL Q3": avg_gray_levels[2] if len(avg_gray_levels) > 2 else None,
-                "Avg. GL Q4": avg_gray_levels[3] if len(avg_gray_levels) > 3 else None,
+                # Handle original: try -e-00-org.png first, then -00-org.png
+                if fname.lower().endswith('-e-00-org.png'):
+                    base_fname = fname.replace('-e-00-org.png', '', 1)
+                else:
+                    base_fname = fname.replace('-00-org.png', '', 1)
+            
+            if base_fname not in image_pairs:
+                image_pairs[base_fname] = {}
+            
+            image_pairs[base_fname]['cal' if is_calibrated else 'org'] = {
+                'folder': folder,
+                'fname': fname,
+                'output_dir': output_dir,
+                'result': result
             }
+        
+        # Process each image pair
+        for base_fname, images in image_pairs.items():
+            for image_type, data in images.items():
+                if data is None:
+                    continue
+                
+                folder = data['folder']
+                fname = data['fname']
+                output_dir = data['output_dir']
+                result = data['result']
+                
+                folder, fname, overlay, overlap_img, radii, ellipsoid_d1, ellipsoid_d2, percent_usage, avg_gray_levels = result
+                overlay_rgb = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
+                if overlap_img is not None:
+                    left_img = overlay_rgb.copy()
+                    right_img = overlap_img.copy()
+                    lh = left_img.shape[0]
+                    rh = right_img.shape[0]
+                    target_h = min(lh, rh)
+                    if lh != target_h:
+                        scale = target_h / lh
+                        lw = int(left_img.shape[1] * scale)
+                        left_img = cv2.resize(left_img, (lw, target_h), interpolation=cv2.INTER_AREA)
+                    if rh != target_h:
+                        scale = target_h / rh
+                        rw = int(right_img.shape[1] * scale)
+                        right_img = cv2.resize(right_img, (rw, target_h), interpolation=cv2.INTER_AREA)
+                    combined = np.hstack([left_img, right_img])
+                else:
+                    combined = overlay_rgb
+                out_img_path = os.path.join(output_dir, os.path.splitext(fname)[0] + "_overlay.png")
+                cv2.imwrite(out_img_path, cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
+                print(f"  [SAVED] {out_img_path}")
+                overlay_text = f"Sensor Usage: {percent_usage:.1f}%" if percent_usage is not None else "Sensor Usage: N/A"
+                overlay_rgb_disp = overlay_rgb.copy()
+                cv2.putText(overlay_rgb_disp, overlay_text, (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (255,255,255), 5, cv2.LINE_AA)
+
+                # --- Display the combined overlay in the GUI ---
+                h, w, ch = combined.shape
+                screen = QApplication.primaryScreen()
+                screen_size = screen.availableGeometry()
+                max_w = int(screen_size.width() * 0.9)
+                max_h = int(screen_size.height() * 0.9)
+                scale = min(max_w / w, max_h / h, 1.0)
+                if scale < 1.0:
+                    combined_disp = cv2.resize(combined, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+                    h, w = combined_disp.shape[:2]
+                else:
+                    combined_disp = combined
+                bytes_per_line = ch * w
+                qimg = QImage(combined_disp.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+                pixmap = QPixmap.fromImage(qimg)
+                self.image_label.setPixmap(pixmap)
+                self.image_label.adjustSize()
+                QApplication.processEvents()
+
+                # Store results for CSV writing (will be merged later)
+                data['csv_ready'] = {
+                    "r1": radii[0] if 0 < len(radii) else None,
+                    "r2": radii[1] if 1 < len(radii) else None,
+                    "r3": radii[2] if 2 < len(radii) else None,
+                    "r4": radii[3] if 3 < len(radii) else None,
+                    "d1": ellipsoid_d1,
+                    "d2": ellipsoid_d2,
+                    "sensor_usage": f"{percent_usage:.1f}" if percent_usage is not None else "",
+                    "Avg. GL Q1": avg_gray_levels[0] if len(avg_gray_levels) > 0 else None,
+                    "Avg. GL Q2": avg_gray_levels[1] if len(avg_gray_levels) > 1 else None,
+                    "Avg. GL Q3": avg_gray_levels[2] if len(avg_gray_levels) > 2 else None,
+                    "Avg. GL Q4": avg_gray_levels[3] if len(avg_gray_levels) > 3 else None,
+                }
+                
+                processed += 1
+                self.progress_bar.setValue(processed)
+                QApplication.processEvents()
+        
+        # Write results to CSV
+        for base_fname, images in image_pairs.items():
+            result_row = {
+                "folder": os.path.basename(images.get('org', images.get('cal'))['folder']),
+                "filename": base_fname,
+            }
+            
+            # Original image data
+            if 'org' in images and 'csv_ready' in images['org']:
+                org_data = images['org']['csv_ready']
+                result_row.update({
+                    "r1": org_data["r1"],
+                    "r2": org_data["r2"],
+                    "r3": org_data["r3"],
+                    "r4": org_data["r4"],
+                    "d1": org_data["d1"],
+                    "d2": org_data["d2"],
+                    "sensor_usage": org_data["sensor_usage"],
+                    "Avg. GL Q1": org_data["Avg. GL Q1"],
+                    "Avg. GL Q2": org_data["Avg. GL Q2"],
+                    "Avg. GL Q3": org_data["Avg. GL Q3"],
+                    "Avg. GL Q4": org_data["Avg. GL Q4"],
+                })
+            
+            # Calibrated image data
+            if 'cal' in images and 'csv_ready' in images['cal']:
+                cal_data = images['cal']['csv_ready']
+                result_row.update({
+                    "r1_cal": cal_data["r1"],
+                    "r2_cal": cal_data["r2"],
+                    "r3_cal": cal_data["r3"],
+                    "r4_cal": cal_data["r4"],
+                    "d1_cal": cal_data["d1"],
+                    "d2_cal": cal_data["d2"],
+                    "sensor_usage_cal": cal_data["sensor_usage"],
+                    "Avg. GL Q1 (Cal)": cal_data["Avg. GL Q1"],
+                    "Avg. GL Q2 (Cal)": cal_data["Avg. GL Q2"],
+                    "Avg. GL Q3 (Cal)": cal_data["Avg. GL Q3"],
+                    "Avg. GL Q4 (Cal)": cal_data["Avg. GL Q4"],
+                })
+            
             all_results.append(result_row)
             with open(csv_path, "a", newline="") as csvfile:
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writerow(result_row)
-            processed += 1
-            self.progress_bar.setValue(processed)
-            QApplication.processEvents()
+        
         # CSV is already written incrementally above
         # Show graph if matplotlib is available
         try:
@@ -756,10 +942,13 @@ class MainWindow(QMainWindow):
             df = pd.DataFrame(all_results)
             plt.figure(figsize=(10,6))
             for i in range(1,5):
-                plt.plot(df["filename"], df[f"r{i}"], marker='o', label=f"r{i}")
+                if f"r{i}" in df.columns:
+                    plt.plot(df["filename"], df[f"r{i}"], marker='o', label=f"r{i} (Original)")
+                if f"r{i}_cal" in df.columns and df[f"r{i}_cal"].notna().any():
+                    plt.plot(df["filename"], df[f"r{i}_cal"], marker='s', linestyle='--', label=f"r{i} (Calibrated)")
             plt.xlabel("Image filename")
             plt.ylabel("Radius (pixels)")
-            plt.title("Detected Radii per Quadrant")
+            plt.title("Detected Radii per Quadrant (Original vs Calibrated)")
             plt.legend()
             plt.xticks(rotation=45, ha='right')
             plt.tight_layout()
@@ -777,14 +966,26 @@ class MainWindow(QMainWindow):
     def on_threshold_changed(self, value):
         self.rgb_threshold = value
         self.threshold_label.setText(f"RGB Threshold: {value}")
+        self.save_settings()  # Save when threshold changes
         if self.image_path:
             self.analyze_image()
     
     def on_radius_changed(self, index):
         """Called when radius multiplier dropdown changes"""
         self.gl_radius_multiplier = self.radius_combo.itemData(index)
+        self.save_settings()  # Save when radius changes
         if self.image_path:
             self.open_image()
+    
+    def on_std_changed(self, value):
+        """Called when STD requirement spinbox changes"""
+        self.std_requirement = value
+        self.save_settings()  # Save when STD changes
+    
+    def closeEvent(self, event):
+        """Save settings when window is closed"""
+        self.save_settings()
+        event.accept()
     
     def analyze_image(self):
         from PyQt6.QtWidgets import QMessageBox
@@ -876,13 +1077,16 @@ class MainWindow(QMainWindow):
             # Load CSV file
             df = pd.read_csv(csv_file)
             
-            # Validate required columns
+            # Validate required columns (original)
             required_cols = ["Avg. GL Q1", "Avg. GL Q2", "Avg. GL Q3", "Avg. GL Q4", "filename"]
             missing_cols = [col for col in required_cols if col not in df.columns]
             if missing_cols:
                 from PyQt6.QtWidgets import QMessageBox
                 QMessageBox.critical(self, "Missing Columns", f"CSV is missing required columns: {', '.join(missing_cols)}")
                 return
+            
+            # Check if calibrated columns exist
+            has_calibrated = all(col in df.columns for col in ["Avg. GL Q1 (Cal)", "Avg. GL Q2 (Cal)", "Avg. GL Q3 (Cal)", "Avg. GL Q4 (Cal)"])
             
             # Extract gray level data and validate
             q1_vals = df["Avg. GL Q1"].values
@@ -904,6 +1108,17 @@ class MainWindow(QMainWindow):
             q4_vals = q4_vals[valid_mask]
             filenames = filenames[valid_mask]
             
+            # Extract calibrated data if available
+            q1_vals_cal = None
+            q2_vals_cal = None
+            q3_vals_cal = None
+            q4_vals_cal = None
+            if has_calibrated:
+                q1_vals_cal = df["Avg. GL Q1 (Cal)"].values[valid_mask]
+                q2_vals_cal = df["Avg. GL Q2 (Cal)"].values[valid_mask]
+                q3_vals_cal = df["Avg. GL Q3 (Cal)"].values[valid_mask]
+                q4_vals_cal = df["Avg. GL Q4 (Cal)"].values[valid_mask]
+            
             # Calculate normalized values (Q2/Q1, Q3/Q1, Q4/Q1)
             norm_q2 = q2_vals / q1_vals
             norm_q3 = q3_vals / q1_vals
@@ -919,16 +1134,97 @@ class MainWindow(QMainWindow):
             std_norm_q3 = np.std(norm_q3)
             std_norm_q4 = np.std(norm_q4)
             
-            print(f"CSV Analysis Results:")
+            print(f"CSV Analysis Results (Original):")
             print(f"  Loaded {len(filenames)} valid images")
             print(f"  Average Q2/Q1: {avg_norm_q2:.3f} +/- {std_norm_q2:.3f}")
             print(f"  Average Q3/Q1: {avg_norm_q3:.3f} +/- {std_norm_q3:.3f}")
             print(f"  Average Q4/Q1: {avg_norm_q4:.3f} +/- {std_norm_q4:.3f}")
             
-            # Create visualization
-            self.create_normalized_plot(filenames, norm_q2, norm_q3, norm_q4, 
-                                       avg_norm_q2, avg_norm_q3, avg_norm_q4,
-                                       std_norm_q2, std_norm_q3, std_norm_q4)
+            # Calculate calibrated metrics if available
+            norm_q2_cal = None
+            norm_q3_cal = None
+            norm_q4_cal = None
+            avg_norm_q2_cal = None
+            avg_norm_q3_cal = None
+            avg_norm_q4_cal = None
+            std_norm_q2_cal = None
+            std_norm_q3_cal = None
+            std_norm_q4_cal = None
+            
+            if has_calibrated and q1_vals_cal is not None:
+                # Calculate normalized values for calibrated data
+                norm_q2_cal = q2_vals_cal / q1_vals_cal
+                norm_q3_cal = q3_vals_cal / q1_vals_cal
+                norm_q4_cal = q4_vals_cal / q1_vals_cal
+                
+                # Calculate averages
+                avg_norm_q2_cal = np.mean(norm_q2_cal)
+                avg_norm_q3_cal = np.mean(norm_q3_cal)
+                avg_norm_q4_cal = np.mean(norm_q4_cal)
+                
+                # Calculate standard deviations
+                std_norm_q2_cal = np.std(norm_q2_cal)
+                std_norm_q3_cal = np.std(norm_q3_cal)
+                std_norm_q4_cal = np.std(norm_q4_cal)
+                
+                print(f"\nCSV Analysis Results (Calibrated):")
+                print(f"  Average Q2/Q1 (Cal): {avg_norm_q2_cal:.3f} +/- {std_norm_q2_cal:.3f}")
+                print(f"  Average Q3/Q1 (Cal): {avg_norm_q3_cal:.3f} +/- {std_norm_q3_cal:.3f}")
+                print(f"  Average Q4/Q1 (Cal): {avg_norm_q4_cal:.3f} +/- {std_norm_q4_cal:.3f}")
+            
+            # Calculate Q3/Q2 and Q3/Q4 ratios
+            norm_q3_q2 = q3_vals / q2_vals
+            norm_q3_q4 = q3_vals / q4_vals
+            avg_norm_q3_q2 = np.mean(norm_q3_q2)
+            avg_norm_q3_q4 = np.mean(norm_q3_q4)
+            std_norm_q3_q2 = np.std(norm_q3_q2)
+            std_norm_q3_q4 = np.std(norm_q3_q4)
+            
+            print(f"  Average Q3/Q2: {avg_norm_q3_q2:.3f} +/- {std_norm_q3_q2:.3f}")
+            print(f"  Average Q3/Q4: {avg_norm_q3_q4:.3f} +/- {std_norm_q3_q4:.3f}")
+            
+            # Calculate calibrated Q3/Q2 and Q3/Q4 if available
+            norm_q3_q2_cal = None
+            norm_q3_q4_cal = None
+            avg_norm_q3_q2_cal = None
+            avg_norm_q3_q4_cal = None
+            std_norm_q3_q2_cal = None
+            std_norm_q3_q4_cal = None
+            
+            if has_calibrated and q1_vals_cal is not None:
+                norm_q3_q2_cal = q3_vals_cal / q2_vals_cal
+                norm_q3_q4_cal = q3_vals_cal / q4_vals_cal
+                avg_norm_q3_q2_cal = np.mean(norm_q3_q2_cal)
+                avg_norm_q3_q4_cal = np.mean(norm_q3_q4_cal)
+                std_norm_q3_q2_cal = np.std(norm_q3_q2_cal)
+                std_norm_q3_q4_cal = np.std(norm_q3_q4_cal)
+                
+                print(f"  Average Q3/Q2 (Cal): {avg_norm_q3_q2_cal:.3f} +/- {std_norm_q3_q2_cal:.3f}")
+                print(f"  Average Q3/Q4 (Cal): {avg_norm_q3_q4_cal:.3f} +/- {std_norm_q3_q4_cal:.3f}")
+            
+            # Create separate plots for each ratio
+            self.create_single_ratio_plot(filenames, norm_q2, avg_norm_q2, std_norm_q2, 
+                                         norm_q2_cal, avg_norm_q2_cal, std_norm_q2_cal, 
+                                         "Q2/Q1", "blue")
+            
+            self.create_single_ratio_plot(filenames, norm_q3, avg_norm_q3, std_norm_q3, 
+                                         norm_q3_cal, avg_norm_q3_cal, std_norm_q3_cal, 
+                                         "Q3/Q1", "green")
+            
+            self.create_single_ratio_plot(filenames, norm_q4, avg_norm_q4, std_norm_q4, 
+                                         norm_q4_cal, avg_norm_q4_cal, std_norm_q4_cal, 
+                                         "Q4/Q1", "red")
+            
+            self.create_single_ratio_plot(filenames, norm_q3_q2, avg_norm_q3_q2, std_norm_q3_q2, 
+                                         norm_q3_q2_cal, avg_norm_q3_q2_cal, std_norm_q3_q2_cal, 
+                                         "Q3/Q2", "purple")
+            
+            self.create_single_ratio_plot(filenames, norm_q3_q4, avg_norm_q3_q4, std_norm_q3_q4, 
+                                         norm_q3_q4_cal, avg_norm_q3_q4_cal, std_norm_q3_q4_cal, 
+                                         "Q3/Q4", "orange")
+            
+            # Create GL Q1 analysis plot
+            self.create_gl_q1_plot(filenames, q1_vals, q1_vals_cal if has_calibrated else None)
             
         except Exception as e:
             import traceback
@@ -937,9 +1233,97 @@ class MainWindow(QMainWindow):
             print(error_msg)
             QMessageBox.critical(self, "Error", error_msg)
     
+    def create_single_ratio_plot(self, filenames, norm_data, avg_val, std_val, 
+                                 norm_data_cal, avg_val_cal, std_val_cal, 
+                                 ratio_name, color):
+        """Create a single plot for one normalized ratio with optional calibrated comparison"""
+        try:
+            import matplotlib.pyplot as plt
+            import numpy as np
+            
+            # Set matplotlib backend
+            import matplotlib
+            matplotlib.use('Qt5Agg')
+            
+            fig, ax = plt.subplots(figsize=(14, 7))
+            
+            # X-axis: filename indices
+            x = np.arange(len(filenames))
+            
+            # Get STD requirement percentage from GUI
+            std_req = self.std_spinbox.value() if hasattr(self, 'std_spinbox') else 1.0
+            std_multiplier = std_req / 100.0
+            
+            # Plot original data
+            ax.plot(x, norm_data, color=color, linestyle='-', marker='o', label=f'{ratio_name} (Org)', linewidth=2, markersize=5)
+            
+            # Plot calibrated data if available
+            if norm_data_cal is not None:
+                ax.plot(x, norm_data_cal, color=color, linestyle='--', marker='s', label=f'{ratio_name} (Cal)', linewidth=2, markersize=5, alpha=0.7)
+            
+            # Add horizontal average lines (Original - solid)
+            ax.axhline(y=avg_val, color=color, linestyle='-', linewidth=2.5, alpha=0.8, label=f'Avg (Org): {avg_val:.3f}')
+            
+            # Add average line for calibrated if available
+            if avg_val_cal is not None:
+                ax.axhline(y=avg_val_cal, color=color, linestyle='--', linewidth=2.5, alpha=0.8, label=f'Avg (Cal): {avg_val_cal:.3f}')
+            
+            # Add STD tolerance bands for original
+            if std_val is not None:
+                upper = avg_val + (std_val * std_multiplier)
+                lower = avg_val - (std_val * std_multiplier)
+                ax.axhline(y=upper, color=color, linestyle=':', linewidth=2, alpha=0.6, label=f'+STD ({std_req}%)')
+                ax.axhline(y=lower, color=color, linestyle=':', linewidth=2, alpha=0.6, label=f'-STD ({std_req}%)')
+            
+            # Add STD tolerance bands for calibrated if available
+            if std_val_cal is not None and avg_val_cal is not None:
+                upper_cal = avg_val_cal + (std_val_cal * std_multiplier)
+                lower_cal = avg_val_cal - (std_val_cal * std_multiplier)
+                ax.axhline(y=upper_cal, color=color, linestyle=':', linewidth=1.5, alpha=0.4)
+                ax.axhline(y=lower_cal, color=color, linestyle=':', linewidth=1.5, alpha=0.4)
+            
+            # Add text annotations
+            text_y = 0.98
+            ax.text(0.02, text_y, f'{ratio_name} (Org): {avg_val:.3f} ± {std_val:.3f}', transform=ax.transAxes, 
+                   fontsize=11, verticalalignment='top', bbox=dict(boxstyle='round', facecolor=color, alpha=0.3))
+            
+            if avg_val_cal is not None:
+                text_y -= 0.08
+                ax.text(0.02, text_y, f'{ratio_name} (Cal): {avg_val_cal:.3f} ± {std_val_cal:.3f}', transform=ax.transAxes, 
+                       fontsize=11, verticalalignment='top', bbox=dict(boxstyle='round', facecolor=color, alpha=0.2))
+            
+            # Labels and formatting
+            ax.set_xlabel('Image Index', fontsize=12, fontweight='bold')
+            ax.set_ylabel(f'{ratio_name} Ratio', fontsize=12, fontweight='bold')
+            has_cal_text = " (Original & Calibrated)" if norm_data_cal is not None else ""
+            title = f'{ratio_name} Normalized Ratio{has_cal_text} - STD Requirement: {std_req}%'
+            ax.set_title(title, fontsize=14, fontweight='bold')
+            ax.legend(loc='upper right', fontsize=9, ncol=2)
+            ax.grid(True, alpha=0.3)
+            
+            # Set x-axis to show every nth label to avoid crowding
+            step = max(1, len(filenames) // 15)
+            ax.set_xticks(x[::step])
+            ax.set_xticklabels([f"{i}" for i in range(0, len(filenames), step)], fontsize=9)
+            
+            plt.tight_layout()
+            plt.show()
+            
+            print(f"{ratio_name} plot displayed successfully")
+            
+        except Exception as e:
+            import traceback
+            print(f"Error creating {ratio_name} plot: {e}")
+            print(traceback.format_exc())
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Plot Error", f"Failed to create {ratio_name} plot:\n{e}")
+    
     def create_normalized_plot(self, filenames, norm_q2, norm_q3, norm_q4, 
                               avg_q2, avg_q3, avg_q4,
-                              std_q2=None, std_q3=None, std_q4=None):
+                              std_q2=None, std_q3=None, std_q4=None,
+                              norm_q2_cal=None, norm_q3_cal=None, norm_q4_cal=None,
+                              avg_q2_cal=None, avg_q3_cal=None, avg_q4_cal=None,
+                              std_q2_cal=None, std_q3_cal=None, std_q4_cal=None):
         """Create matplotlib plot with normalized quadrant ratios and STD bands"""
         try:
             import matplotlib.pyplot as plt
@@ -955,49 +1339,69 @@ class MainWindow(QMainWindow):
             std_req = self.std_spinbox.value() if hasattr(self, 'std_spinbox') else 1.0
             std_multiplier = std_req / 100.0  # Convert percentage to multiplier
             
-            # Plot the three normalized ratio curves with markers
-            ax.plot(x, norm_q2, 'b-o', label='Q2/Q1', linewidth=2, markersize=4)
-            ax.plot(x, norm_q3, 'g-s', label='Q3/Q1', linewidth=2, markersize=4)
-            ax.plot(x, norm_q4, 'r-^', label='Q4/Q1', linewidth=2, markersize=4)
+            # Plot the three normalized ratio curves with markers (Original)
+            ax.plot(x, norm_q2, 'b-o', label='Q2/Q1 (Org)', linewidth=2, markersize=4)
+            ax.plot(x, norm_q3, 'g-s', label='Q3/Q1 (Org)', linewidth=2, markersize=4)
+            ax.plot(x, norm_q4, 'r-^', label='Q4/Q1 (Org)', linewidth=2, markersize=4)
             
-            # Add horizontal average lines (solid)
-            ax.axhline(y=avg_q2, color='blue', linestyle='-', linewidth=2, alpha=0.7, label=f'Avg Q2/Q1 = {avg_q2:.3f}')
-            ax.axhline(y=avg_q3, color='green', linestyle='-', linewidth=2, alpha=0.7, label=f'Avg Q3/Q1 = {avg_q3:.3f}')
-            ax.axhline(y=avg_q4, color='red', linestyle='-', linewidth=2, alpha=0.7, label=f'Avg Q4/Q1 = {avg_q4:.3f}')
+            # Plot calibrated curves if available
+            if norm_q2_cal is not None:
+                ax.plot(x, norm_q2_cal, 'b--d', label='Q2/Q1 (Cal)', linewidth=2, markersize=4, alpha=0.7)
+                ax.plot(x, norm_q3_cal, 'g--x', label='Q3/Q1 (Cal)', linewidth=2, markersize=4, alpha=0.7)
+                ax.plot(x, norm_q4_cal, 'r--+', label='Q4/Q1 (Cal)', linewidth=2, markersize=4, alpha=0.7)
+            
+            # Add horizontal average lines (Original - solid)
+            ax.axhline(y=avg_q2, color='blue', linestyle='-', linewidth=2, alpha=0.7, label=f'Avg Q2/Q1 (Org): {avg_q2:.3f}')
+            ax.axhline(y=avg_q3, color='green', linestyle='-', linewidth=2, alpha=0.7, label=f'Avg Q3/Q1 (Org): {avg_q3:.3f}')
+            ax.axhline(y=avg_q4, color='red', linestyle='-', linewidth=2, alpha=0.7, label=f'Avg Q4/Q1 (Org): {avg_q4:.3f}')
+            
+            # Add average lines for calibrated data if available
+            if avg_q2_cal is not None:
+                ax.axhline(y=avg_q2_cal, color='blue', linestyle='--', linewidth=2, alpha=0.7, label=f'Avg Q2/Q1 (Cal): {avg_q2_cal:.3f}')
+                ax.axhline(y=avg_q3_cal, color='green', linestyle='--', linewidth=2, alpha=0.7, label=f'Avg Q3/Q1 (Cal): {avg_q3_cal:.3f}')
+                ax.axhline(y=avg_q4_cal, color='red', linestyle='--', linewidth=2, alpha=0.7, label=f'Avg Q4/Q1 (Cal): {avg_q4_cal:.3f}')
             
             # Add STD tolerance bands if standard deviations are provided
             if std_q2 is not None:
                 upper_q2 = avg_q2 + (std_q2 * std_multiplier)
                 lower_q2 = avg_q2 - (std_q2 * std_multiplier)
-                ax.axhline(y=upper_q2, color='blue', linestyle='--', linewidth=1.5, alpha=0.5, label=f'Q2/Q1 +STD ({std_req}%)')
-                ax.axhline(y=lower_q2, color='blue', linestyle='--', linewidth=1.5, alpha=0.5, label=f'Q2/Q1 -STD ({std_req}%)')
+                ax.axhline(y=upper_q2, color='blue', linestyle=':', linewidth=2, alpha=0.5, label=f'Q2/Q1 +STD ({std_req}%)')
+                ax.axhline(y=lower_q2, color='blue', linestyle=':', linewidth=2, alpha=0.5, label=f'Q2/Q1 -STD ({std_req}%)')
             
             if std_q3 is not None:
                 upper_q3 = avg_q3 + (std_q3 * std_multiplier)
                 lower_q3 = avg_q3 - (std_q3 * std_multiplier)
-                ax.axhline(y=upper_q3, color='green', linestyle='--', linewidth=1.5, alpha=0.5, label=f'Q3/Q1 +STD ({std_req}%)')
-                ax.axhline(y=lower_q3, color='green', linestyle='--', linewidth=1.5, alpha=0.5, label=f'Q3/Q1 -STD ({std_req}%)')
+                ax.axhline(y=upper_q3, color='green', linestyle=':', linewidth=2, alpha=0.5, label=f'Q3/Q1 +STD ({std_req}%)')
+                ax.axhline(y=lower_q3, color='green', linestyle=':', linewidth=2, alpha=0.5, label=f'Q3/Q1 -STD ({std_req}%)')
             
             if std_q4 is not None:
                 upper_q4 = avg_q4 + (std_q4 * std_multiplier)
                 lower_q4 = avg_q4 - (std_q4 * std_multiplier)
-                ax.axhline(y=upper_q4, color='red', linestyle='--', linewidth=1.5, alpha=0.5, label=f'Q4/Q1 +STD ({std_req}%)')
-                ax.axhline(y=lower_q4, color='red', linestyle='--', linewidth=1.5, alpha=0.5, label=f'Q4/Q1 -STD ({std_req}%)')
+                ax.axhline(y=upper_q4, color='red', linestyle=':', linewidth=2, alpha=0.5, label=f'Q4/Q1 +STD ({std_req}%)')
+                ax.axhline(y=lower_q4, color='red', linestyle=':', linewidth=2, alpha=0.5, label=f'Q4/Q1 -STD ({std_req}%)')
             
             # Add average values as text annotations
-            ax.text(0.02, 0.98, f'Avg Q2/Q1: {avg_q2:.3f}', transform=ax.transAxes, 
-                   fontsize=11, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='blue', alpha=0.3))
-            ax.text(0.02, 0.90, f'Avg Q3/Q1: {avg_q3:.3f}', transform=ax.transAxes,
-                   fontsize=11, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='green', alpha=0.3))
-            ax.text(0.02, 0.82, f'Avg Q4/Q1: {avg_q4:.3f}', transform=ax.transAxes,
-                   fontsize=11, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='red', alpha=0.3))
+            ax.text(0.02, 0.98, f'Avg Q2/Q1 (Org): {avg_q2:.3f}', transform=ax.transAxes, 
+                   fontsize=10, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='blue', alpha=0.3))
+            ax.text(0.02, 0.92, f'Avg Q3/Q1 (Org): {avg_q3:.3f}', transform=ax.transAxes,
+                   fontsize=10, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='green', alpha=0.3))
+            ax.text(0.02, 0.86, f'Avg Q4/Q1 (Org): {avg_q4:.3f}', transform=ax.transAxes,
+                   fontsize=10, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='red', alpha=0.3))
             
+            if avg_q2_cal is not None:
+                ax.text(0.02, 0.80, f'Avg Q2/Q1 (Cal): {avg_q2_cal:.3f}', transform=ax.transAxes, 
+                       fontsize=10, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='cyan', alpha=0.3))
+                ax.text(0.02, 0.74, f'Avg Q3/Q1 (Cal): {avg_q3_cal:.3f}', transform=ax.transAxes,
+                       fontsize=10, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='lime', alpha=0.3))
+                ax.text(0.02, 0.68, f'Avg Q4/Q1 (Cal): {avg_q4_cal:.3f}', transform=ax.transAxes,
+                       fontsize=10, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.3))
             # Labels and formatting
             ax.set_xlabel('Image Index', fontsize=12, fontweight='bold')
             ax.set_ylabel('Normalized Gray Level Ratio', fontsize=12, fontweight='bold')
-            title = f'Normalized Quadrant Ratios (Q/Q1) - STD Requirement: {std_req}%'
+            has_cal_text = " (Original & Calibrated)" if avg_q2_cal is not None else ""
+            title = f'Normalized Quadrant Ratios (Q/Q1){has_cal_text} - STD Requirement: {std_req}%'
             ax.set_title(title, fontsize=14, fontweight='bold')
-            ax.legend(loc='upper left', fontsize=9, ncol=2)
+            ax.legend(loc='upper left', fontsize=8, ncol=3)
             ax.grid(True, alpha=0.3)
             
             # Set x-axis to show every nth label to avoid crowding
@@ -1016,6 +1420,90 @@ class MainWindow(QMainWindow):
             print(traceback.format_exc())
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Plot Error", f"Failed to create plot:\n{e}")
+
+    def create_gl_q1_plot(self, filenames, q1_vals, q1_vals_cal=None):
+        """Create plot with Avg GL Q1 vs device and histogram (with calibrated comparison if available)"""
+        try:
+            import matplotlib.pyplot as plt
+            import numpy as np
+            
+            # Create figure with 2 subplots (1 row, 2 columns)
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+            
+            # X-axis: image indices
+            x = np.arange(len(filenames))
+            
+            # Left plot: Avg GL Q1 vs Image Index
+            ax1.plot(x, q1_vals, 'b-o', linewidth=2, markersize=5, label='Avg GL Q1 (Org)')
+            avg_q1 = np.mean(q1_vals)
+            ax1.axhline(y=avg_q1, color='blue', linestyle='--', linewidth=2, alpha=0.7, label=f'Avg (Org): {avg_q1:.1f}')
+            
+            # Plot calibrated data if available
+            if q1_vals_cal is not None:
+                ax1.plot(x, q1_vals_cal, 'r-s', linewidth=2, markersize=5, label='Avg GL Q1 (Cal)')
+                avg_q1_cal = np.mean(q1_vals_cal)
+                ax1.axhline(y=avg_q1_cal, color='red', linestyle='--', linewidth=2, alpha=0.7, label=f'Avg (Cal): {avg_q1_cal:.1f}')
+            
+            ax1.set_xlabel('Image Index', fontsize=12, fontweight='bold')
+            ax1.set_ylabel('Avg GL Q1 (Gray Level)', fontsize=12, fontweight='bold')
+            title_suffix = " (Original vs Calibrated)" if q1_vals_cal is not None else ""
+            ax1.set_title(f'Average Gray Level Q1 vs Device{title_suffix}', fontsize=13, fontweight='bold')
+            ax1.legend(fontsize=10)
+            ax1.grid(True, alpha=0.3)
+            
+            # Set x-axis to show every nth label to avoid crowding
+            step = max(1, len(filenames) // 15)
+            ax1.set_xticks(x[::step])
+            ax1.set_xticklabels([f"{i}" for i in range(0, len(filenames), step)], fontsize=9)
+            
+            # Right plot: Histogram of Avg GL Q1
+            ax2.hist(q1_vals, bins=20, color='blue', edgecolor='black', alpha=0.6, label='Original')
+            avg_q1 = np.mean(q1_vals)
+            ax2.axvline(x=avg_q1, color='blue', linestyle='--', linewidth=2.5, label=f'Mean (Org): {avg_q1:.1f}')
+            std_q1 = np.std(q1_vals)
+            ax2.axvline(x=avg_q1 + std_q1, color='blue', linestyle=':', linewidth=2, alpha=0.7)
+            ax2.axvline(x=avg_q1 - std_q1, color='blue', linestyle=':', linewidth=2, alpha=0.7)
+            
+            # Plot calibrated histogram if available
+            if q1_vals_cal is not None:
+                ax2.hist(q1_vals_cal, bins=20, color='red', edgecolor='black', alpha=0.6, label='Calibrated')
+                avg_q1_cal = np.mean(q1_vals_cal)
+                ax2.axvline(x=avg_q1_cal, color='red', linestyle='--', linewidth=2.5, label=f'Mean (Cal): {avg_q1_cal:.1f}')
+                std_q1_cal = np.std(q1_vals_cal)
+                ax2.axvline(x=avg_q1_cal + std_q1_cal, color='red', linestyle=':', linewidth=2, alpha=0.7)
+                ax2.axvline(x=avg_q1_cal - std_q1_cal, color='red', linestyle=':', linewidth=2, alpha=0.7)
+            
+            ax2.set_xlabel('Avg GL Q1 Value', fontsize=12, fontweight='bold')
+            ax2.set_ylabel('Frequency', fontsize=12, fontweight='bold')
+            ax2.set_title(f'Histogram of Avg GL Q1{title_suffix}', fontsize=13, fontweight='bold')
+            ax2.legend(fontsize=10)
+            ax2.grid(True, alpha=0.3, axis='y')
+            
+            # Print statistics
+            print(f"\nAvg GL Q1 Statistics (Original):")
+            print(f"  Mean: {avg_q1:.2f}")
+            print(f"  Std Dev: {std_q1:.2f}")
+            print(f"  Min: {np.min(q1_vals):.2f}")
+            print(f"  Max: {np.max(q1_vals):.2f}")
+            print(f"  Median: {np.median(q1_vals):.2f}")
+            
+            if q1_vals_cal is not None:
+                print(f"\nAvg GL Q1 Statistics (Calibrated):")
+                print(f"  Mean: {avg_q1_cal:.2f}")
+                print(f"  Std Dev: {std_q1_cal:.2f}")
+                print(f"  Min: {np.min(q1_vals_cal):.2f}")
+                print(f"  Max: {np.max(q1_vals_cal):.2f}")
+                print(f"  Median: {np.median(q1_vals_cal):.2f}")
+            
+            plt.tight_layout()
+            plt.show()
+            
+        except Exception as e:
+            import traceback
+            print(f"Error creating GL Q1 plot: {e}")
+            print(traceback.format_exc())
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Plot Error", f"Failed to create GL Q1 plot:\n{e}")
 
     def draw_transparent_circle(self, image, center, radius, color, fill=False):
         # Always fill the circle with 50% opacity for the left-side image
