@@ -3,9 +3,94 @@
 import sys
 import cv2
 import numpy as np
-from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton, QLabel, QFileDialog, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton, QLabel, QFileDialog, QVBoxLayout, QWidget, QDialog, QCheckBox, QScrollArea, QGroupBox
 from PyQt6.QtGui import QPixmap, QPalette, QColor, QImage, QPainter, QPen, QBrush
 from PyQt6.QtCore import Qt
+
+class PlotSelectionDialog(QDialog):
+    """Dialog for selecting which plots to generate"""
+    def __init__(self, parent=None, has_calibrated=False):
+        super().__init__(parent)
+        self.has_calibrated = has_calibrated
+        self.selected_plots = set()
+        self.init_ui()
+    
+    def init_ui(self):
+        self.setWindowTitle("Select Plots to Generate")
+        self.setGeometry(100, 100, 600, 350)
+        
+        main_layout = QVBoxLayout()
+        
+        # Title
+        title_label = QLabel("Select which Gray Level (GL) plots to generate.\nEach plot shows original and calibrated data (e and g).")
+        main_layout.addWidget(title_label)
+        
+        # Scrollable area for checkboxes
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout(scroll_widget)
+        
+        # Plot options
+        self.plot_options = {
+            'gl_q1': ('GL Q1 vs Device (Original + Calibrated)', True),
+            'gl_q1_histogram': ('GL Q1 with Histogram (Original + Calibrated)', True),
+            'gl_q2': ('GL Q2 vs Device (Original + Calibrated)', True),
+            'gl_q3': ('GL Q3 vs Device (Original + Calibrated)', True),
+            'gl_q4': ('GL Q4 vs Device (Original + Calibrated)', True),
+            'ratio_q2_q1': ('Q2/Q1 Normalized Ratio (Original + Calibrated)', True),
+            'ratio_q3_q1': ('Q3/Q1 Normalized Ratio (Original + Calibrated)', True),
+            'ratio_q3_q2': ('Q3/Q2 Normalized Ratio (Original + Calibrated)', True),
+            'ratio_q4_q1': ('Q4/Q1 Normalized Ratio (Original + Calibrated)', True),
+            'ratio_q3_q4': ('Q3/Q4 Normalized Ratio (Original + Calibrated)', True),
+        }
+        
+        self.checkboxes = {}
+        for key, (label, enabled) in self.plot_options.items():
+            checkbox = QCheckBox(label)
+            checkbox.setChecked(enabled)
+            self.checkboxes[key] = checkbox
+            scroll_layout.addWidget(checkbox)
+        
+        scroll.setWidget(scroll_widget)
+        main_layout.addWidget(scroll)
+        
+        # Buttons
+        button_layout = QVBoxLayout()
+        
+        select_all_btn = QPushButton("Select All")
+        select_all_btn.clicked.connect(self.select_all)
+        button_layout.addWidget(select_all_btn)
+        
+        deselect_all_btn = QPushButton("Deselect All")
+        deselect_all_btn.clicked.connect(self.deselect_all)
+        button_layout.addWidget(deselect_all_btn)
+        
+        ok_btn = QPushButton("OK")
+        ok_btn.clicked.connect(self.accept)
+        button_layout.addWidget(ok_btn)
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        main_layout.addLayout(button_layout)
+        self.setLayout(main_layout)
+    
+    def select_all(self):
+        for checkbox in self.checkboxes.values():
+            checkbox.setChecked(True)
+    
+    def deselect_all(self):
+        for checkbox in self.checkboxes.values():
+            checkbox.setChecked(False)
+    
+    def get_selected_plots(self):
+        """Return dict of selected plots"""
+        selected = {}
+        for key, checkbox in self.checkboxes.items():
+            selected[key] = checkbox.isChecked()
+        return selected
 
 class MainWindow(QMainWindow):
     def analyze_and_overlay(self, img, rgb_threshold, gl_radius_multiplier=0.5):
@@ -727,25 +812,33 @@ class MainWindow(QMainWindow):
         # Step 2: Check for images in main folder
         # Collect variants with fallback logic: g and e first, default only if no g/e exist
         import re
-        g_files = [f for f in os.listdir(main_folder) if f.lower().endswith('-g-00-org.png')]
-        e_files = [f for f in os.listdir(main_folder) if f.lower().endswith('-e-00-org.png')]
+        g_files = [f for f in os.listdir(main_folder) if f.lower().endswith('-g-00-org.png') and f.lower().startswith('ex')]
+        e_files = [f for f in os.listdir(main_folder) if f.lower().endswith('-e-00-org.png') and f.lower().startswith('ex')]
         
         # Extract base filenames from g and e variants
         variant_bases = set()
         for f in g_files:
-            variant_bases.add(f.replace('-g-00-org.png', '').replace('-G-00-ORG.PNG', ''))
+            # Extract the numeric part after 'ex-' for comparison (e.g., '32_3210_00_0001')
+            base = f.replace('-g-00-org.png', '').replace('-G-00-ORG.PNG', '')
+            numeric_part = base.replace('ex-', '').replace('EX-', '')
+            variant_bases.add(numeric_part)
         for f in e_files:
-            variant_bases.add(f.replace('-e-00-org.png', '').replace('-E-00-ORG.PNG', ''))
+            # Extract the numeric part after 'ex-' for comparison
+            base = f.replace('-e-00-org.png', '').replace('-E-00-ORG.PNG', '')
+            numeric_part = base.replace('ex-', '').replace('EX-', '')
+            variant_bases.add(numeric_part)
         
         # For default, only match files where:
         # 1. -00-org.png is preceded by a digit (not a letter like k, t, x)
         # 2. Base filename doesn't already have a g or e variant (fallback logic)
         default_files = []
         for f in os.listdir(main_folder):
-            if re.search(r'\d-00-org\.png$', f.lower()):
-                # Extract base filename for this default file
+            if re.search(r'\d-00-org\.png$', f.lower()) and not f.lower().startswith('ex'):
                 base = re.sub(r'-00-org\.png$', '', f, flags=re.IGNORECASE)
-                if base not in variant_bases:
+                # Extract numeric part for comparison (remove first prefix letter: c, s, etc.)
+                numeric_part = base[1:] if len(base) > 0 else base
+                # Only add default if no ex- variant exists for this base
+                if numeric_part not in variant_bases:
                     default_files.append(f)
         
         image_files = g_files + e_files + default_files
@@ -794,25 +887,33 @@ class MainWindow(QMainWindow):
             import re
             all_images = [f for f in os.listdir(folder) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))]
             # Collect variants with fallback logic: g and e first, default only if no g/e exist
-            g_files = [f for f in all_images if f.lower().endswith('-g-00-org.png')]
-            e_files = [f for f in all_images if f.lower().endswith('-e-00-org.png')]
+            g_files = [f for f in all_images if f.lower().endswith('-g-00-org.png') and f.lower().startswith('ex')]
+            e_files = [f for f in all_images if f.lower().endswith('-e-00-org.png') and f.lower().startswith('ex')]
             
             # Extract base filenames from g and e variants
             variant_bases = set()
             for f in g_files:
-                variant_bases.add(f.replace('-g-00-org.png', '').replace('-G-00-ORG.PNG', ''))
+                # Extract the numeric part after 'ex-' for comparison (e.g., '32_3210_00_0001')
+                base = f.replace('-g-00-org.png', '').replace('-G-00-ORG.PNG', '')
+                numeric_part = base.replace('ex-', '').replace('EX-', '')
+                variant_bases.add(numeric_part)
             for f in e_files:
-                variant_bases.add(f.replace('-e-00-org.png', '').replace('-E-00-ORG.PNG', ''))
+                # Extract the numeric part after 'ex-' for comparison
+                base = f.replace('-e-00-org.png', '').replace('-E-00-ORG.PNG', '')
+                numeric_part = base.replace('ex-', '').replace('EX-', '')
+                variant_bases.add(numeric_part)
             
             # For default, only match files where:
             # 1. -00-org.png is preceded by a digit (not a letter like k, t, x, etc)
             # 2. Base filename doesn't already have a g or e variant (fallback logic)
             default_files = []
             for f in all_images:
-                if re.search(r'\d-00-org\.png$', f.lower()):
-                    # Extract base filename for this default file
+                if re.search(r'\d-00-org\.png$', f.lower()) and not f.lower().startswith('ex'):
                     base = re.sub(r'-00-org\.png$', '', f, flags=re.IGNORECASE)
-                    if base not in variant_bases:
+                    # Extract numeric part for comparison (remove first prefix letter: c, s, etc.)
+                    numeric_part = base[1:] if len(base) > 0 else base
+                    # Only add default if no ex- variant exists for this base
+                    if numeric_part not in variant_bases:
                         default_files.append(f)
             
             image_files = g_files + e_files + default_files
@@ -1004,7 +1105,7 @@ class MainWindow(QMainWindow):
                 }
         
         # Write results to CSV
-        for base_fname, images in image_pairs.items():
+        for (base_fname, variant), images in image_pairs.items():
             result_row = {
                 "folder": os.path.basename(images.get('org', images.get('cal'))['folder']),
                 "filename": base_fname,
@@ -1054,23 +1155,103 @@ class MainWindow(QMainWindow):
         try:
             import matplotlib.pyplot as plt
             import pandas as pd
+            import glob
+            import os
+            
             df = pd.DataFrame(all_results)
-            plt.figure(figsize=(10,6))
-            for i in range(1,5):
-                if f"r{i}" in df.columns:
-                    plt.plot(df["filename"], df[f"r{i}"], marker='o', label=f"r{i} (Original)")
-                if f"r{i}_cal" in df.columns and df[f"r{i}_cal"].notna().any():
-                    plt.plot(df["filename"], df[f"r{i}_cal"], marker='s', linestyle='--', label=f"r{i} (Calibrated)")
-            plt.xlabel("Image filename")
-            plt.ylabel("Radius (pixels)")
-            plt.title("Detected Radii per Quadrant (Original vs Calibrated)")
-            plt.legend()
-            plt.xticks(rotation=45, ha='right')
+            
+            # Extract variant directly from filename/tuple representation
+            def get_variant_from_filename(filename):
+                """Extract variant from filename or tuple string"""
+                filename_str = str(filename).lower()
+                
+                # Check if it's a tuple representation like "('ex-32_3210_00_0001', 'g')"
+                if "'g'" in filename_str:
+                    return 'g'
+                elif "'e'" in filename_str:
+                    return 'e'
+                # Also check for direct filename patterns
+                elif '-g-' in filename_str:
+                    return 'g'
+                elif '-e-' in filename_str:
+                    return 'e'
+                else:
+                    return 'default'
+            
+            # Apply variant detection from filename
+            df['variant'] = df['filename'].apply(get_variant_from_filename)
+            
+            # Debug: print variant distribution
+            print(f"\n[DEBUG] Variant distribution:")
+            print(f"  G variants: {(df['variant'] == 'g').sum()}")
+            print(f"  E variants: {(df['variant'] == 'e').sum()}")
+            print(f"  Default variants: {(df['variant'] == 'default').sum()}")
+            print(f"  Sample filenames and variants:")
+            for idx, row in df.head(10).iterrows():
+                print(f"    {row['filename']} -> {row['variant']}")
+            
+            # Separate by variant
+            df_g = df[df['variant'] == 'g'].reset_index(drop=True)
+            df_e = df[df['variant'] == 'e'].reset_index(drop=True)
+            df_default = df[df['variant'] == 'default'].reset_index(drop=True)
+            
+            print(f"[DEBUG] After separation:")
+            print(f"  df_g length: {len(df_g)}, first variant: {df_g['variant'].iloc[0] if len(df_g) > 0 else 'N/A'}")
+            print(f"  df_e length: {len(df_e)}, first variant: {df_e['variant'].iloc[0] if len(df_e) > 0 else 'N/A'}")
+            print(f"  df_default length: {len(df_default)}")
+            
+            # Define colors for variants
+            color_g = '#FF6B6B'      # Red for g
+            color_e = '#4ECDC4'      # Teal for e
+            color_default = '#95E1D3' # Light teal for default
+            
+            # Create separate plots for each quadrant (r1, r2, r3, r4)
+            fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+            axes = axes.flatten()
+            
+            for quad_idx, r_name in enumerate(['r1', 'r2', 'r3', 'r4']):
+                ax = axes[quad_idx]
+                
+                # Plot G curve - same x positions as E
+                if len(df_g) > 0 and r_name in df_g.columns:
+                    ax.plot(df_g.index, df_g[r_name], marker='o', color=color_g, alpha=0.8, linewidth=2.5, 
+                           label=f"{r_name.upper()} (G - Original)", markersize=6)
+                    avg_g = df_g[r_name].mean()
+                    std_g = df_g[r_name].std()
+                    ax.axhline(y=avg_g, color=color_g, linestyle='--', alpha=0.6, linewidth=2, 
+                              label=f"Avg (G): {avg_g:.3f} ± {std_g:.3f}")
+                
+                # Plot E curve - same x positions as G (overlaid)
+                if len(df_e) > 0 and r_name in df_e.columns:
+                    ax.plot(df_e.index, df_e[r_name], marker='s', color=color_e, alpha=0.8, linewidth=2.5,
+                           label=f"{r_name.upper()} (E - Original)", markersize=6)
+                    avg_e = df_e[r_name].mean()
+                    std_e = df_e[r_name].std()
+                    ax.axhline(y=avg_e, color=color_e, linestyle='--', alpha=0.6, linewidth=2,
+                              label=f"Avg (E): {avg_e:.3f} ± {std_e:.3f}")
+                
+                # Plot Default curve if exists
+                if len(df_default) > 0 and r_name in df_default.columns:
+                    ax.plot(df_default.index, df_default[r_name], marker='^', color=color_default, alpha=0.8, linewidth=2.5,
+                           label=f"{r_name.upper()} (Default - Original)", markersize=6)
+                    avg_d = df_default[r_name].mean()
+                    std_d = df_default[r_name].std()
+                    ax.axhline(y=avg_d, color=color_default, linestyle='--', alpha=0.6, linewidth=2,
+                              label=f"Avg (Default): {avg_d:.3f} ± {std_d:.3f}")
+                
+                ax.set_xlabel("Image Index", fontsize=11)
+                ax.set_ylabel(f"Radius {r_name[-1]} (pixels)", fontsize=11)
+                ax.set_title(f"Radius {r_name[-1]} by Variant", fontsize=12, fontweight='bold')
+                ax.legend(loc='best', fontsize=9)
+                ax.grid(True, alpha=0.3)
+            
             plt.tight_layout()
             plt.show()
         except Exception as e:
             # Silently skip graph if matplotlib/pandas not available
-            print(f"Could not show graph (matplotlib/pandas not installed): {e}")
+            print(f"Could not show graph: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             self.progress_bar.setValue(0)
             self.progress_bar.setVisible(False)
@@ -1177,19 +1358,17 @@ class MainWindow(QMainWindow):
             self.progress_bar.setValue(0)
             self.progress_bar.setVisible(False)
     def analyze_csv_data(self):
-        """Load CSV file and create normalized data visualization"""
+        """Load CSV file and create GL quadrant plots with original + calibrated data"""
         try:
             import os
+            import numpy as np
+            import pandas as pd
+            import matplotlib
+            matplotlib.use('Qt5Agg')
+            
             csv_file = QFileDialog.getOpenFileName(self, "Select CSV File", "", "CSV Files (*.csv)")[0]
             if not csv_file:
                 return
-            
-            import csv
-            import pandas as pd
-            
-            # Set matplotlib backend to Qt5Agg before importing pyplot
-            import matplotlib
-            matplotlib.use('Qt5Agg')
             
             # Load CSV file
             df = pd.read_csv(csv_file)
@@ -1205,150 +1384,382 @@ class MainWindow(QMainWindow):
             # Check if calibrated columns exist
             has_calibrated = all(col in df.columns for col in ["Avg. GL Q1 (Cal)", "Avg. GL Q2 (Cal)", "Avg. GL Q3 (Cal)", "Avg. GL Q4 (Cal)"])
             
-            # Extract gray level data and validate
-            q1_vals = df["Avg. GL Q1"].values
-            q2_vals = df["Avg. GL Q2"].values
-            q3_vals = df["Avg. GL Q3"].values
-            q4_vals = df["Avg. GL Q4"].values
-            filenames = df["filename"].values
-            
-            # Filter out rows with None/NaN values
-            valid_mask = ~(pd.isna(q1_vals) | pd.isna(q2_vals) | pd.isna(q3_vals) | pd.isna(q4_vals) | (q1_vals == 0))
-            if not valid_mask.any():
-                from PyQt6.QtWidgets import QMessageBox
-                QMessageBox.warning(self, "No Valid Data", "No valid gray level data found in CSV (all Q1 values are 0 or NaN)")
+            # --- SHOW PLOT SELECTION DIALOG ---
+            dialog = PlotSelectionDialog(self, has_calibrated)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
+            selected_plots = dialog.get_selected_plots()
             
-            q1_vals = q1_vals[valid_mask]
-            q2_vals = q2_vals[valid_mask]
-            q3_vals = q3_vals[valid_mask]
-            q4_vals = q4_vals[valid_mask]
-            filenames = filenames[valid_mask]
+            # Define variant function
+            def get_variant(filename):
+                filename_str = str(filename).lower()
+                if "'g'" in filename_str or '-g-' in filename_str:
+                    return 'g'
+                elif "'e'" in filename_str or '-e-' in filename_str:
+                    return 'e'
+                else:
+                    return 'default'
             
-            # Extract calibrated data if available
-            q1_vals_cal = None
-            q2_vals_cal = None
-            q3_vals_cal = None
-            q4_vals_cal = None
-            if has_calibrated:
-                q1_vals_cal = df["Avg. GL Q1 (Cal)"].values[valid_mask]
-                q2_vals_cal = df["Avg. GL Q2 (Cal)"].values[valid_mask]
-                q3_vals_cal = df["Avg. GL Q3 (Cal)"].values[valid_mask]
-                q4_vals_cal = df["Avg. GL Q4 (Cal)"].values[valid_mask]
+            # Extract variants and create dataframes by variant
+            variants = np.array([get_variant(f) for f in df['filename'].values])
+            mask_g = variants == 'g'
+            mask_e = variants == 'e'
+            mask_default = variants == 'default'
             
-            # Calculate normalized values (Q2/Q1, Q3/Q1, Q4/Q1)
-            norm_q2 = q2_vals / q1_vals
-            norm_q3 = q3_vals / q1_vals
-            norm_q4 = q4_vals / q1_vals
+            df_g = df[mask_g].reset_index(drop=True)
+            df_e = df[mask_e].reset_index(drop=True)
+            df_default = df[mask_default].reset_index(drop=True)
             
-            # Calculate averages
-            avg_norm_q2 = np.mean(norm_q2)
-            avg_norm_q3 = np.mean(norm_q3)
-            avg_norm_q4 = np.mean(norm_q4)
+            color_g = '#FF6B6B'      # Red for g
+            color_e = '#4ECDC4'      # Teal for e
+            color_default = '#95E1D3' # Light teal for default
             
-            # Calculate standard deviations
-            std_norm_q2 = np.std(norm_q2)
-            std_norm_q3 = np.std(norm_q3)
-            std_norm_q4 = np.std(norm_q4)
+            # --- GENERATE PLOTS BASED ON SELECTION ---
+            import matplotlib.pyplot as plt
+            try:
+                import mplcursors
+            except ImportError:
+                mplcursors = None
             
-            print(f"CSV Analysis Results (Original):")
-            print(f"  Loaded {len(filenames)} valid images")
-            print(f"  Average Q2/Q1: {avg_norm_q2:.3f} +/- {std_norm_q2:.3f}")
-            print(f"  Average Q3/Q1: {avg_norm_q3:.3f} +/- {std_norm_q3:.3f}")
-            print(f"  Average Q4/Q1: {avg_norm_q4:.3f} +/- {std_norm_q4:.3f}")
+            # GL Q1 plot
+            if selected_plots.get('gl_q1', True):
+                print("\nGenerating GL Q1 plot (Original + Calibrated)...")
+                try:
+                    self._create_gl_quadrant_plot(
+                        df_g, df_e, df_default,
+                        'Avg. GL Q1', 'Avg. GL Q1 (Cal)',
+                        'GL Q1', color_g, color_e, color_default
+                    )
+                except Exception as e:
+                    print(f"  Error creating GL Q1 plot: {e}")
             
-            # Calculate calibrated metrics if available
-            norm_q2_cal = None
-            norm_q3_cal = None
-            norm_q4_cal = None
-            avg_norm_q2_cal = None
-            avg_norm_q3_cal = None
-            avg_norm_q4_cal = None
-            std_norm_q2_cal = None
-            std_norm_q3_cal = None
-            std_norm_q4_cal = None
+            # GL Q1 with Histogram plot
+            if selected_plots.get('gl_q1_histogram', True):
+                print("\nGenerating GL Q1 with Histogram (Original + Calibrated)...")
+                try:
+                    filenames_g = df_g['filename'].values if len(df_g) > 0 else np.array([])
+                    filenames_e = df_e['filename'].values if len(df_e) > 0 else np.array([])
+                    filenames_default = df_default['filename'].values if len(df_default) > 0 else np.array([])
+                    
+                    q1_g = df_g['Avg. GL Q1'].values if len(df_g) > 0 and 'Avg. GL Q1' in df_g.columns else np.array([])
+                    q1_e = df_e['Avg. GL Q1'].values if len(df_e) > 0 and 'Avg. GL Q1' in df_e.columns else np.array([])
+                    q1_default = df_default['Avg. GL Q1'].values if len(df_default) > 0 and 'Avg. GL Q1' in df_default.columns else np.array([])
+                    
+                    q1_g_cal = df_g['Avg. GL Q1 (Cal)'].values if len(df_g) > 0 and 'Avg. GL Q1 (Cal)' in df_g.columns else None
+                    q1_e_cal = df_e['Avg. GL Q1 (Cal)'].values if len(df_e) > 0 and 'Avg. GL Q1 (Cal)' in df_e.columns else None
+                    q1_default_cal = df_default['Avg. GL Q1 (Cal)'].values if len(df_default) > 0 and 'Avg. GL Q1 (Cal)' in df_default.columns else None
+                    
+                    self.create_gl_q1_plot_with_histogram_variants(
+                        filenames_g, filenames_e, filenames_default,
+                        q1_g, q1_e, q1_default,
+                        q1_g_cal, q1_e_cal, q1_default_cal
+                    )
+                except Exception as e:
+                    print(f"  Error creating GL Q1 histogram plot: {e}")
             
-            if has_calibrated and q1_vals_cal is not None:
-                # Calculate normalized values for calibrated data
-                norm_q2_cal = q2_vals_cal / q1_vals_cal
-                norm_q3_cal = q3_vals_cal / q1_vals_cal
-                norm_q4_cal = q4_vals_cal / q1_vals_cal
-                
-                # Calculate averages
-                avg_norm_q2_cal = np.mean(norm_q2_cal)
-                avg_norm_q3_cal = np.mean(norm_q3_cal)
-                avg_norm_q4_cal = np.mean(norm_q4_cal)
-                
-                # Calculate standard deviations
-                std_norm_q2_cal = np.std(norm_q2_cal)
-                std_norm_q3_cal = np.std(norm_q3_cal)
-                std_norm_q4_cal = np.std(norm_q4_cal)
-                
-                print(f"\nCSV Analysis Results (Calibrated):")
-                print(f"  Average Q2/Q1 (Cal): {avg_norm_q2_cal:.3f} +/- {std_norm_q2_cal:.3f}")
-                print(f"  Average Q3/Q1 (Cal): {avg_norm_q3_cal:.3f} +/- {std_norm_q3_cal:.3f}")
-                print(f"  Average Q4/Q1 (Cal): {avg_norm_q4_cal:.3f} +/- {std_norm_q4_cal:.3f}")
+            # GL Q2 plot
+            if selected_plots.get('gl_q2', True):
+                print("\nGenerating GL Q2 plot (Original + Calibrated)...")
+                try:
+                    self._create_gl_quadrant_plot(
+                        df_g, df_e, df_default,
+                        'Avg. GL Q2', 'Avg. GL Q2 (Cal)',
+                        'GL Q2', color_g, color_e, color_default
+                    )
+                except Exception as e:
+                    print(f"  Error creating GL Q2 plot: {e}")
             
-            # Calculate Q3/Q2 and Q3/Q4 ratios
-            norm_q3_q2 = q3_vals / q2_vals
-            norm_q3_q4 = q3_vals / q4_vals
-            avg_norm_q3_q2 = np.mean(norm_q3_q2)
-            avg_norm_q3_q4 = np.mean(norm_q3_q4)
-            std_norm_q3_q2 = np.std(norm_q3_q2)
-            std_norm_q3_q4 = np.std(norm_q3_q4)
+            # GL Q3 plot
+            if selected_plots.get('gl_q3', True):
+                print("\nGenerating GL Q3 plot (Original + Calibrated)...")
+                try:
+                    self._create_gl_quadrant_plot(
+                        df_g, df_e, df_default,
+                        'Avg. GL Q3', 'Avg. GL Q3 (Cal)',
+                        'GL Q3', color_g, color_e, color_default
+                    )
+                except Exception as e:
+                    print(f"  Error creating GL Q3 plot: {e}")
             
-            print(f"  Average Q3/Q2: {avg_norm_q3_q2:.3f} +/- {std_norm_q3_q2:.3f}")
-            print(f"  Average Q3/Q4: {avg_norm_q3_q4:.3f} +/- {std_norm_q3_q4:.3f}")
+            # GL Q4 plot
+            if selected_plots.get('gl_q4', True):
+                print("\nGenerating GL Q4 plot (Original + Calibrated)...")
+                try:
+                    self._create_gl_quadrant_plot(
+                        df_g, df_e, df_default,
+                        'Avg. GL Q4', 'Avg. GL Q4 (Cal)',
+                        'GL Q4', color_g, color_e, color_default
+                    )
+                except Exception as e:
+                    print(f"  Error creating GL Q4 plot: {e}")
             
-            # Calculate calibrated Q3/Q2 and Q3/Q4 if available
-            norm_q3_q2_cal = None
-            norm_q3_q4_cal = None
-            avg_norm_q3_q2_cal = None
-            avg_norm_q3_q4_cal = None
-            std_norm_q3_q2_cal = None
-            std_norm_q3_q4_cal = None
+            # --- NORMALIZED RATIO PLOTS (Q2/Q1, Q3/Q1, Q4/Q1) ---
             
-            if has_calibrated and q1_vals_cal is not None:
-                norm_q3_q2_cal = q3_vals_cal / q2_vals_cal
-                norm_q3_q4_cal = q3_vals_cal / q4_vals_cal
-                avg_norm_q3_q2_cal = np.mean(norm_q3_q2_cal)
-                avg_norm_q3_q4_cal = np.mean(norm_q3_q4_cal)
-                std_norm_q3_q2_cal = np.std(norm_q3_q2_cal)
-                std_norm_q3_q4_cal = np.std(norm_q3_q4_cal)
-                
-                print(f"  Average Q3/Q2 (Cal): {avg_norm_q3_q2_cal:.3f} +/- {std_norm_q3_q2_cal:.3f}")
-                print(f"  Average Q3/Q4 (Cal): {avg_norm_q3_q4_cal:.3f} +/- {std_norm_q3_q4_cal:.3f}")
+            # Q2/Q1 Ratio plot
+            if selected_plots.get('ratio_q2_q1', True):
+                print("\nGenerating Q2/Q1 Normalized Ratio plot (Original + Calibrated)...")
+                try:
+                    filenames_g = df_g['filename'].values if len(df_g) > 0 else np.array([])
+                    filenames_e = df_e['filename'].values if len(df_e) > 0 else np.array([])
+                    filenames_default = df_default['filename'].values if len(df_default) > 0 else np.array([])
+                    
+                    q1_g = df_g['Avg. GL Q1'].values if len(df_g) > 0 and 'Avg. GL Q1' in df_g.columns else np.array([])
+                    q2_g = df_g['Avg. GL Q2'].values if len(df_g) > 0 and 'Avg. GL Q2' in df_g.columns else np.array([])
+                    ratio_q2_q1_g = (q2_g / q1_g) if len(q1_g) > 0 and len(q2_g) > 0 else np.array([])
+                    
+                    q1_e = df_e['Avg. GL Q1'].values if len(df_e) > 0 and 'Avg. GL Q1' in df_e.columns else np.array([])
+                    q2_e = df_e['Avg. GL Q2'].values if len(df_e) > 0 and 'Avg. GL Q2' in df_e.columns else np.array([])
+                    ratio_q2_q1_e = (q2_e / q1_e) if len(q1_e) > 0 and len(q2_e) > 0 else np.array([])
+                    
+                    q1_default = df_default['Avg. GL Q1'].values if len(df_default) > 0 and 'Avg. GL Q1' in df_default.columns else np.array([])
+                    q2_default = df_default['Avg. GL Q2'].values if len(df_default) > 0 and 'Avg. GL Q2' in df_default.columns else np.array([])
+                    ratio_q2_q1_default = (q2_default / q1_default) if len(q1_default) > 0 and len(q2_default) > 0 else np.array([])
+                    
+                    q1_g_cal = df_g['Avg. GL Q1 (Cal)'].values if len(df_g) > 0 and 'Avg. GL Q1 (Cal)' in df_g.columns else None
+                    q2_g_cal = df_g['Avg. GL Q2 (Cal)'].values if len(df_g) > 0 and 'Avg. GL Q2 (Cal)' in df_g.columns else None
+                    ratio_q2_q1_g_cal = (q2_g_cal / q1_g_cal) if q1_g_cal is not None and q2_g_cal is not None else None
+                    
+                    q1_e_cal = df_e['Avg. GL Q1 (Cal)'].values if len(df_e) > 0 and 'Avg. GL Q1 (Cal)' in df_e.columns else None
+                    q2_e_cal = df_e['Avg. GL Q2 (Cal)'].values if len(df_e) > 0 and 'Avg. GL Q2 (Cal)' in df_e.columns else None
+                    ratio_q2_q1_e_cal = (q2_e_cal / q1_e_cal) if q1_e_cal is not None and q2_e_cal is not None else None
+                    
+                    q1_default_cal = df_default['Avg. GL Q1 (Cal)'].values if len(df_default) > 0 and 'Avg. GL Q1 (Cal)' in df_default.columns else None
+                    q2_default_cal = df_default['Avg. GL Q2 (Cal)'].values if len(df_default) > 0 and 'Avg. GL Q2 (Cal)' in df_default.columns else None
+                    ratio_q2_q1_default_cal = (q2_default_cal / q1_default_cal) if q1_default_cal is not None and q2_default_cal is not None else None
+                    
+                    self.create_ratio_plot_with_variants(
+                        filenames_g, filenames_e, filenames_default,
+                        ratio_q2_q1_g, ratio_q2_q1_e, ratio_q2_q1_default,
+                        ratio_q2_q1_g_cal, ratio_q2_q1_e_cal, ratio_q2_q1_default_cal,
+                        "Q2/Q1", "blue"
+                    )
+                except Exception as e:
+                    print(f"  Error creating Q2/Q1 plot: {e}")
             
-            # Create separate plots for each ratio
-            self.create_single_ratio_plot(filenames, norm_q2, avg_norm_q2, std_norm_q2, 
-                                         norm_q2_cal, avg_norm_q2_cal, std_norm_q2_cal, 
-                                         "Q2/Q1", "blue")
+            # Q3/Q1 Ratio plot
+            if selected_plots.get('ratio_q3_q1', True):
+                print("\nGenerating Q3/Q1 Normalized Ratio plot (Original + Calibrated)...")
+                try:
+                    q3_g = df_g['Avg. GL Q3'].values if len(df_g) > 0 and 'Avg. GL Q3' in df_g.columns else np.array([])
+                    ratio_q3_q1_g = (q3_g / q1_g) if len(q1_g) > 0 and len(q3_g) > 0 else np.array([])
+                    
+                    q3_e = df_e['Avg. GL Q3'].values if len(df_e) > 0 and 'Avg. GL Q3' in df_e.columns else np.array([])
+                    ratio_q3_q1_e = (q3_e / q1_e) if len(q1_e) > 0 and len(q3_e) > 0 else np.array([])
+                    
+                    q3_default = df_default['Avg. GL Q3'].values if len(df_default) > 0 and 'Avg. GL Q3' in df_default.columns else np.array([])
+                    ratio_q3_q1_default = (q3_default / q1_default) if len(q1_default) > 0 and len(q3_default) > 0 else np.array([])
+                    
+                    q3_g_cal = df_g['Avg. GL Q3 (Cal)'].values if len(df_g) > 0 and 'Avg. GL Q3 (Cal)' in df_g.columns else None
+                    ratio_q3_q1_g_cal = (q3_g_cal / q1_g_cal) if q1_g_cal is not None and q3_g_cal is not None else None
+                    
+                    q3_e_cal = df_e['Avg. GL Q3 (Cal)'].values if len(df_e) > 0 and 'Avg. GL Q3 (Cal)' in df_e.columns else None
+                    ratio_q3_q1_e_cal = (q3_e_cal / q1_e_cal) if q1_e_cal is not None and q3_e_cal is not None else None
+                    
+                    q3_default_cal = df_default['Avg. GL Q3 (Cal)'].values if len(df_default) > 0 and 'Avg. GL Q3 (Cal)' in df_default.columns else None
+                    ratio_q3_q1_default_cal = (q3_default_cal / q1_default_cal) if q1_default_cal is not None and q3_default_cal is not None else None
+                    
+                    self.create_ratio_plot_with_variants(
+                        filenames_g, filenames_e, filenames_default,
+                        ratio_q3_q1_g, ratio_q3_q1_e, ratio_q3_q1_default,
+                        ratio_q3_q1_g_cal, ratio_q3_q1_e_cal, ratio_q3_q1_default_cal,
+                        "Q3/Q1", "green"
+                    )
+                except Exception as e:
+                    print(f"  Error creating Q3/Q1 plot: {e}")
             
-            self.create_single_ratio_plot(filenames, norm_q3, avg_norm_q3, std_norm_q3, 
-                                         norm_q3_cal, avg_norm_q3_cal, std_norm_q3_cal, 
-                                         "Q3/Q1", "green")
+            # Q4/Q1 Ratio plot
+            if selected_plots.get('ratio_q4_q1', True):
+                print("\nGenerating Q4/Q1 Normalized Ratio plot (Original + Calibrated)...")
+                try:
+                    q4_g = df_g['Avg. GL Q4'].values if len(df_g) > 0 and 'Avg. GL Q4' in df_g.columns else np.array([])
+                    ratio_q4_q1_g = (q4_g / q1_g) if len(q1_g) > 0 and len(q4_g) > 0 else np.array([])
+                    
+                    q4_e = df_e['Avg. GL Q4'].values if len(df_e) > 0 and 'Avg. GL Q4' in df_e.columns else np.array([])
+                    ratio_q4_q1_e = (q4_e / q1_e) if len(q1_e) > 0 and len(q4_e) > 0 else np.array([])
+                    
+                    q4_default = df_default['Avg. GL Q4'].values if len(df_default) > 0 and 'Avg. GL Q4' in df_default.columns else np.array([])
+                    ratio_q4_q1_default = (q4_default / q1_default) if len(q1_default) > 0 and len(q4_default) > 0 else np.array([])
+                    
+                    q4_g_cal = df_g['Avg. GL Q4 (Cal)'].values if len(df_g) > 0 and 'Avg. GL Q4 (Cal)' in df_g.columns else None
+                    ratio_q4_q1_g_cal = (q4_g_cal / q1_g_cal) if q1_g_cal is not None and q4_g_cal is not None else None
+                    
+                    q4_e_cal = df_e['Avg. GL Q4 (Cal)'].values if len(df_e) > 0 and 'Avg. GL Q4 (Cal)' in df_e.columns else None
+                    ratio_q4_q1_e_cal = (q4_e_cal / q1_e_cal) if q1_e_cal is not None and q4_e_cal is not None else None
+                    
+                    q4_default_cal = df_default['Avg. GL Q4 (Cal)'].values if len(df_default) > 0 and 'Avg. GL Q4 (Cal)' in df_default.columns else None
+                    ratio_q4_q1_default_cal = (q4_default_cal / q1_default_cal) if q1_default_cal is not None and q4_default_cal is not None else None
+                    
+                    self.create_ratio_plot_with_variants(
+                        filenames_g, filenames_e, filenames_default,
+                        ratio_q4_q1_g, ratio_q4_q1_e, ratio_q4_q1_default,
+                        ratio_q4_q1_g_cal, ratio_q4_q1_e_cal, ratio_q4_q1_default_cal,
+                        "Q4/Q1", "red"
+                    )
+                except Exception as e:
+                    print(f"  Error creating Q4/Q1 plot: {e}")
             
-            self.create_single_ratio_plot(filenames, norm_q4, avg_norm_q4, std_norm_q4, 
-                                         norm_q4_cal, avg_norm_q4_cal, std_norm_q4_cal, 
-                                         "Q4/Q1", "red")
+            # Q3/Q2 Ratio plot
+            if selected_plots.get('ratio_q3_q2', True):
+                print("\nGenerating Q3/Q2 Normalized Ratio plot (Original + Calibrated)...")
+                try:
+                    q2_g = df_g['Avg. GL Q2'].values if len(df_g) > 0 and 'Avg. GL Q2' in df_g.columns else np.array([])
+                    q3_g = df_g['Avg. GL Q3'].values if len(df_g) > 0 and 'Avg. GL Q3' in df_g.columns else np.array([])
+                    ratio_q3_q2_g = (q3_g / q2_g) if len(q2_g) > 0 and len(q3_g) > 0 else np.array([])
+                    
+                    q2_e = df_e['Avg. GL Q2'].values if len(df_e) > 0 and 'Avg. GL Q2' in df_e.columns else np.array([])
+                    q3_e = df_e['Avg. GL Q3'].values if len(df_e) > 0 and 'Avg. GL Q3' in df_e.columns else np.array([])
+                    ratio_q3_q2_e = (q3_e / q2_e) if len(q2_e) > 0 and len(q3_e) > 0 else np.array([])
+                    
+                    q2_default = df_default['Avg. GL Q2'].values if len(df_default) > 0 and 'Avg. GL Q2' in df_default.columns else np.array([])
+                    q3_default = df_default['Avg. GL Q3'].values if len(df_default) > 0 and 'Avg. GL Q3' in df_default.columns else np.array([])
+                    ratio_q3_q2_default = (q3_default / q2_default) if len(q2_default) > 0 and len(q3_default) > 0 else np.array([])
+                    
+                    q2_g_cal = df_g['Avg. GL Q2 (Cal)'].values if len(df_g) > 0 and 'Avg. GL Q2 (Cal)' in df_g.columns else None
+                    q3_g_cal = df_g['Avg. GL Q3 (Cal)'].values if len(df_g) > 0 and 'Avg. GL Q3 (Cal)' in df_g.columns else None
+                    ratio_q3_q2_g_cal = (q3_g_cal / q2_g_cal) if q2_g_cal is not None and q3_g_cal is not None else None
+                    
+                    q2_e_cal = df_e['Avg. GL Q2 (Cal)'].values if len(df_e) > 0 and 'Avg. GL Q2 (Cal)' in df_e.columns else None
+                    q3_e_cal = df_e['Avg. GL Q3 (Cal)'].values if len(df_e) > 0 and 'Avg. GL Q3 (Cal)' in df_e.columns else None
+                    ratio_q3_q2_e_cal = (q3_e_cal / q2_e_cal) if q2_e_cal is not None and q3_e_cal is not None else None
+                    
+                    q2_default_cal = df_default['Avg. GL Q2 (Cal)'].values if len(df_default) > 0 and 'Avg. GL Q2 (Cal)' in df_default.columns else None
+                    q3_default_cal = df_default['Avg. GL Q3 (Cal)'].values if len(df_default) > 0 and 'Avg. GL Q3 (Cal)' in df_default.columns else None
+                    ratio_q3_q2_default_cal = (q3_default_cal / q2_default_cal) if q2_default_cal is not None and q3_default_cal is not None else None
+                    
+                    self.create_ratio_plot_with_variants(
+                        filenames_g, filenames_e, filenames_default,
+                        ratio_q3_q2_g, ratio_q3_q2_e, ratio_q3_q2_default,
+                        ratio_q3_q2_g_cal, ratio_q3_q2_e_cal, ratio_q3_q2_default_cal,
+                        "Q3/Q2", "purple"
+                    )
+                except Exception as e:
+                    print(f"  Error creating Q3/Q2 plot: {e}")
             
-            self.create_single_ratio_plot(filenames, norm_q3_q2, avg_norm_q3_q2, std_norm_q3_q2, 
-                                         norm_q3_q2_cal, avg_norm_q3_q2_cal, std_norm_q3_q2_cal, 
-                                         "Q3/Q2", "purple")
+            # Q3/Q4 Ratio plot
+            if selected_plots.get('ratio_q3_q4', True):
+                print("\nGenerating Q3/Q4 Normalized Ratio plot (Original + Calibrated)...")
+                try:
+                    q3_q4_g = (q3_g / q4_g) if len(q4_g) > 0 and len(q3_g) > 0 else np.array([])
+                    q3_q4_e = (q3_e / q4_e) if len(q4_e) > 0 and len(q3_e) > 0 else np.array([])
+                    q3_q4_default = (q3_default / q4_default) if len(q4_default) > 0 and len(q3_default) > 0 else np.array([])
+                    
+                    q3_q4_g_cal = (q3_g_cal / q4_g_cal) if q4_g_cal is not None and q3_g_cal is not None else None
+                    q3_q4_e_cal = (q3_e_cal / q4_e_cal) if q4_e_cal is not None and q3_e_cal is not None else None
+                    q3_q4_default_cal = (q3_default_cal / q4_default_cal) if q4_default_cal is not None and q3_default_cal is not None else None
+                    
+                    self.create_ratio_plot_with_variants(
+                        filenames_g, filenames_e, filenames_default,
+                        q3_q4_g, q3_q4_e, q3_q4_default,
+                        q3_q4_g_cal, q3_q4_e_cal, q3_q4_default_cal,
+                        "Q3/Q4", "orange"
+                    )
+                except Exception as e:
+                    print(f"  Error creating Q3/Q4 plot: {e}")
             
-            self.create_single_ratio_plot(filenames, norm_q3_q4, avg_norm_q3_q4, std_norm_q3_q4, 
-                                         norm_q3_q4_cal, avg_norm_q3_q4_cal, std_norm_q3_q4_cal, 
-                                         "Q3/Q4", "orange")
-            
-            # Create GL Q1 analysis plot
-            self.create_gl_q1_plot(filenames, q1_vals, q1_vals_cal if has_calibrated else None)
-            
+            print("\nAnalysis complete!")
+        
         except Exception as e:
             import traceback
             from PyQt6.QtWidgets import QMessageBox
             error_msg = f"Error during CSV analysis:\n\n{str(e)}\n\n{traceback.format_exc()}"
             print(error_msg)
             QMessageBox.critical(self, "Error", error_msg)
+    
+    def _create_gl_quadrant_plot(self, df_g, df_e, df_default, 
+                                col_orig, col_cal, 
+                                title, color_g, color_e, color_default):
+        """Create GL quadrant plot showing original + calibrated data with variant separation"""
+        import matplotlib.pyplot as plt
+        import numpy as np
+        
+        try:
+            import mplcursors
+        except ImportError:
+            mplcursors = None
+        
+        fig, ax = plt.subplots(figsize=(14, 7))
+        
+        # Helper function for moving average
+        def moving_average(arr, window=5):
+            return np.convolve(arr, np.ones(window)/window, mode='valid')
+        
+        # Plot data for each variant (e, g, default)
+        all_data = []  # To store (data, variant, label, color, marker, linestyle)
+        
+        # G variant - original
+        if len(df_g) > 0 and col_orig in df_g.columns:
+            y = df_g[col_orig].values
+            x = np.arange(len(y))
+            ax.plot(x, y, marker='o', linestyle='-', color=color_g, alpha=0.8, 
+                   linewidth=2.5, markersize=7, label=f'{title} G (Original)')
+            if len(y) >= 5:
+                ma = moving_average(y, 5)
+                ax.plot(range(len(ma)), ma, linestyle=':', color=color_g, alpha=0.5, linewidth=2)
+            all_data.append((y, 'g', 'Original', color_g, x))
+            
+            # G variant - calibrated
+            if col_cal in df_g.columns:
+                y_cal = df_g[col_cal].values
+                ax.plot(x, y_cal, marker='o', linestyle='--', color=color_g, alpha=0.5, 
+                       linewidth=2, markersize=6, label=f'{title} G (Calibrated)')
+                if len(y_cal) >= 5:
+                    ma_cal = moving_average(y_cal, 5)
+                    ax.plot(range(len(ma_cal)), ma_cal, linestyle=':', color=color_g, alpha=0.3, linewidth=1.5)
+                all_data.append((y_cal, 'g', 'Calibrated', color_g, x))
+        
+        # E variant - original
+        if len(df_e) > 0 and col_orig in df_e.columns:
+            y = df_e[col_orig].values
+            x = np.arange(len(y))
+            ax.plot(x, y, marker='s', linestyle='-', color=color_e, alpha=0.8, 
+                   linewidth=2.5, markersize=7, label=f'{title} E (Original)')
+            if len(y) >= 5:
+                ma = moving_average(y, 5)
+                ax.plot(range(len(ma)), ma, linestyle=':', color=color_e, alpha=0.5, linewidth=2)
+            all_data.append((y, 'e', 'Original', color_e, x))
+            
+            # E variant - calibrated
+            if col_cal in df_e.columns:
+                y_cal = df_e[col_cal].values
+                ax.plot(x, y_cal, marker='s', linestyle='--', color=color_e, alpha=0.5, 
+                       linewidth=2, markersize=6, label=f'{title} E (Calibrated)')
+                if len(y_cal) >= 5:
+                    ma_cal = moving_average(y_cal, 5)
+                    ax.plot(range(len(ma_cal)), ma_cal, linestyle=':', color=color_e, alpha=0.3, linewidth=1.5)
+                all_data.append((y_cal, 'e', 'Calibrated', color_e, x))
+        
+        # Default variant - original
+        if len(df_default) > 0 and col_orig in df_default.columns:
+            y = df_default[col_orig].values
+            x = np.arange(len(y))
+            ax.plot(x, y, marker='^', linestyle='-', color=color_default, alpha=0.7, 
+                   linewidth=2.5, markersize=7, label=f'{title} Default (Original)')
+            if len(y) >= 5:
+                ma = moving_average(y, 5)
+                ax.plot(range(len(ma)), ma, linestyle=':', color=color_default, alpha=0.4, linewidth=2)
+            all_data.append((y, 'default', 'Original', color_default, x))
+            
+            # Default variant - calibrated
+            if col_cal in df_default.columns:
+                y_cal = df_default[col_cal].values
+                ax.plot(x, y_cal, marker='^', linestyle='--', color=color_default, alpha=0.4, 
+                       linewidth=2, markersize=6, label=f'{title} Default (Calibrated)')
+                if len(y_cal) >= 5:
+                    ma_cal = moving_average(y_cal, 5)
+                    ax.plot(range(len(ma_cal)), ma_cal, linestyle=':', color=color_default, alpha=0.2, linewidth=1.5)
+                all_data.append((y_cal, 'default', 'Calibrated', color_default, x))
+        
+        # Formatting
+        ax.set_title(f'{title} vs. Device (Original + Calibrated)', fontsize=16, fontweight='bold')
+        ax.set_xlabel('Image Index', fontsize=12)
+        ax.set_ylabel(f'Gray Level {title[-2:]}', fontsize=12)
+        ax.legend(loc='best', fontsize=10, ncol=2)
+        ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+        
+        print(f"  {title} plot displayed successfully")
     
     def create_single_ratio_plot(self, filenames, norm_data, avg_val, std_val, 
                                  norm_data_cal, avg_val_cal, std_val_cal, 
@@ -1458,6 +1869,419 @@ class MainWindow(QMainWindow):
             print(traceback.format_exc())
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Plot Error", f"Failed to create {ratio_name} plot:\n{e}")
+    
+    def create_ratio_plot_with_variants(self, filenames_g, filenames_e, filenames_default,
+                                       norm_data_g, norm_data_e, norm_data_default,
+                                       norm_data_g_cal, norm_data_e_cal, norm_data_default_cal,
+                                       ratio_name, color):
+        """Create a single plot for one ratio WITH VARIANT SEPARATION (G vs E)"""
+        try:
+            import matplotlib.pyplot as plt
+            import numpy as np
+            
+            # Set matplotlib backend
+            import matplotlib
+            matplotlib.use('Qt5Agg')
+            
+            fig, ax = plt.subplots(figsize=(14, 7))
+            
+            # Get STD requirement percentage from GUI
+            std_req = self.std_spinbox.value() if hasattr(self, 'std_spinbox') else 1.0
+            std_multiplier = std_req / 100.0
+            
+            # Define colors for variants
+            color_g = '#FF6B6B'      # Red for g
+            color_e = '#4ECDC4'      # Teal for e
+            color_default = '#95E1D3' # Light teal for default
+            
+            # Plot G variant (red)
+            if len(norm_data_g) > 0:
+                x_g = np.arange(len(norm_data_g))
+                ax.plot(x_g, norm_data_g, color=color_g, linestyle='-', marker='o', 
+                       label=f'{ratio_name} (G - Original)', linewidth=2.5, markersize=6)
+                avg_g = np.mean(norm_data_g)
+                std_g = np.std(norm_data_g)
+                ax.axhline(y=avg_g, color=color_g, linestyle='-', linewidth=2.5, alpha=0.8, 
+                          label=f'Avg (G): {avg_g:.3f} ± {std_g:.3f}')
+                
+                # STD bands for G
+                upper_g = avg_g + (std_g * std_multiplier)
+                lower_g = avg_g - (std_g * std_multiplier)
+                ax.axhline(y=upper_g, color=color_g, linestyle=':', linewidth=2, alpha=0.6)
+                ax.axhline(y=lower_g, color=color_g, linestyle=':', linewidth=2, alpha=0.6)
+                
+                # Plot calibrated G if available
+                if norm_data_g_cal is not None and len(norm_data_g_cal) > 0:
+                    ax.plot(x_g, norm_data_g_cal, color=color_g, linestyle='--', marker='o', 
+                           label=f'{ratio_name} (G - Calibrated)', linewidth=2.5, markersize=6, alpha=0.7)
+                    avg_g_cal = np.mean(norm_data_g_cal)
+                    std_g_cal = np.std(norm_data_g_cal)
+                    ax.axhline(y=avg_g_cal, color=color_g, linestyle='--', linewidth=2, alpha=0.6,
+                              label=f'Avg (G Cal): {avg_g_cal:.3f} ± {std_g_cal:.3f}')
+            
+            # Plot E variant (teal)
+            if len(norm_data_e) > 0:
+                x_e = np.arange(len(norm_data_e))
+                ax.plot(x_e, norm_data_e, color=color_e, linestyle='-', marker='s', 
+                       label=f'{ratio_name} (E - Original)', linewidth=2.5, markersize=6)
+                avg_e = np.mean(norm_data_e)
+                std_e = np.std(norm_data_e)
+                ax.axhline(y=avg_e, color=color_e, linestyle='-', linewidth=2.5, alpha=0.8, 
+                          label=f'Avg (E): {avg_e:.3f} ± {std_e:.3f}')
+                
+                # STD bands for E
+                upper_e = avg_e + (std_e * std_multiplier)
+                lower_e = avg_e - (std_e * std_multiplier)
+                ax.axhline(y=upper_e, color=color_e, linestyle=':', linewidth=2, alpha=0.6)
+                ax.axhline(y=lower_e, color=color_e, linestyle=':', linewidth=2, alpha=0.6)
+                
+                # Plot calibrated E if available
+                if norm_data_e_cal is not None and len(norm_data_e_cal) > 0:
+                    ax.plot(x_e, norm_data_e_cal, color=color_e, linestyle='--', marker='s', 
+                           label=f'{ratio_name} (E - Calibrated)', linewidth=2.5, markersize=6, alpha=0.7)
+                    avg_e_cal = np.mean(norm_data_e_cal)
+                    std_e_cal = np.std(norm_data_e_cal)
+                    ax.axhline(y=avg_e_cal, color=color_e, linestyle='--', linewidth=2, alpha=0.6,
+                              label=f'Avg (E Cal): {avg_e_cal:.3f} ± {std_e_cal:.3f}')
+            
+            # Plot Default variant if it exists
+            if len(norm_data_default) > 0:
+                x_default = np.arange(len(norm_data_default))
+                ax.plot(x_default, norm_data_default, color=color_default, linestyle='-', marker='^', 
+                       label=f'{ratio_name} (Default - Original)', linewidth=2.5, markersize=6)
+                avg_default = np.mean(norm_data_default)
+                std_default = np.std(norm_data_default)
+                ax.axhline(y=avg_default, color=color_default, linestyle='-', linewidth=2, alpha=0.6,
+                          label=f'Avg (Default): {avg_default:.3f} ± {std_default:.3f}')
+                
+                # Plot calibrated Default if available
+                if norm_data_default_cal is not None and len(norm_data_default_cal) > 0:
+                    ax.plot(x_default, norm_data_default_cal, color=color_default, linestyle='--', marker='^', 
+                           label=f'{ratio_name} (Default - Calibrated)', linewidth=2.5, markersize=6, alpha=0.7)
+                    avg_default_cal = np.mean(norm_data_default_cal)
+                    std_default_cal = np.std(norm_data_default_cal)
+                    ax.axhline(y=avg_default_cal, color=color_default, linestyle='--', linewidth=1.5, alpha=0.4,
+                              label=f'Avg (Default Cal): {avg_default_cal:.3f} ± {std_default_cal:.3f}')
+            
+            # Labels and formatting
+            ax.set_xlabel('Image Index', fontsize=12, fontweight='bold')
+            ax.set_ylabel(f'{ratio_name} Ratio', fontsize=12, fontweight='bold')
+            title = f'{ratio_name} - STD Requirement: {std_req}%'
+            ax.set_title(title, fontsize=14, fontweight='bold')
+            ax.legend(loc='upper right', fontsize=10, ncol=2)
+            ax.grid(True, alpha=0.3)
+            
+            # Add interactive tooltips with filenames
+            try:
+                import mplcursors
+                
+                # Tooltips for G variant
+                if len(norm_data_g) > 0:
+                    annotations_g = []
+                    for i, yi in enumerate(norm_data_g):
+                        annotations_g.append(f"Index {i} (G)\n{filenames_g[i]}\nValue: {yi:.4f}")
+                    
+                    lines_g = [line for line in ax.get_lines() if line.get_color() == color_g and line.get_linestyle() == '-' and line.get_marker() == 'o']
+                    if lines_g:
+                        cursor_g = mplcursors.cursor(lines_g[0], hover=True)
+                        cursor_g.connect("add", lambda sel: sel.annotation.set_text(
+                            annotations_g[int(sel.index)] if int(sel.index) < len(annotations_g) else "N/A"))
+                
+                # Tooltips for E variant
+                if len(norm_data_e) > 0:
+                    annotations_e = []
+                    for i, yi in enumerate(norm_data_e):
+                        annotations_e.append(f"Index {i} (E)\n{filenames_e[i]}\nValue: {yi:.4f}")
+                    
+                    lines_e = [line for line in ax.get_lines() if line.get_color() == color_e and line.get_linestyle() == '-' and line.get_marker() == 's']
+                    if lines_e:
+                        cursor_e = mplcursors.cursor(lines_e[0], hover=True)
+                        cursor_e.connect("add", lambda sel: sel.annotation.set_text(
+                            annotations_e[int(sel.index)] if int(sel.index) < len(annotations_e) else "N/A"))
+            except ImportError:
+                print("mplcursors not installed - tooltips unavailable. Install with: pip install mplcursors")
+            
+            plt.tight_layout()
+            plt.show()
+            
+            print(f"{ratio_name} plot (with variants) displayed successfully")
+            
+        except Exception as e:
+            import traceback
+            print(f"Error creating {ratio_name} plot with variants: {e}")
+            print(traceback.format_exc())
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Plot Error", f"Failed to create {ratio_name} plot:\n{e}")
+    
+    def create_gl_q1_plot_with_variants(self, filenames_g, filenames_e, filenames_default,
+                                       q1_g, q1_e, q1_default,
+                                       q1_g_cal, q1_e_cal, q1_default_cal):
+        """Create GL Q1 plot WITH VARIANT SEPARATION (G vs E)"""
+        try:
+            import matplotlib.pyplot as plt
+            import numpy as np
+            
+            # Set matplotlib backend
+            import matplotlib
+            matplotlib.use('Qt5Agg')
+            
+            fig, ax = plt.subplots(figsize=(14, 7))
+            
+            # Define colors for variants
+            color_g = '#FF6B6B'      # Red for g
+            color_e = '#4ECDC4'      # Teal for e
+            color_default = '#95E1D3' # Light teal for default
+            
+            # Plot G variant (red)
+            if len(q1_g) > 0:
+                x_g = np.arange(len(q1_g))
+                ax.plot(x_g, q1_g, color=color_g, linestyle='-', marker='o', 
+                       label=f'Avg GL Q1 (G - Original)', linewidth=2.5, markersize=6)
+                avg_g = np.mean(q1_g)
+                std_g = np.std(q1_g)
+                ax.axhline(y=avg_g, color=color_g, linestyle='-', linewidth=2.5, alpha=0.8, 
+                          label=f'Avg (G): {avg_g:.1f} ± {std_g:.1f}')
+                
+                # Plot calibrated G if available
+                if q1_g_cal is not None and len(q1_g_cal) > 0:
+                    ax.plot(x_g, q1_g_cal, color=color_g, linestyle='--', marker='o', 
+                           label=f'Avg GL Q1 (G - Calibrated)', linewidth=2.5, markersize=6, alpha=0.7)
+                    avg_g_cal = np.mean(q1_g_cal)
+                    std_g_cal = np.std(q1_g_cal)
+                    ax.axhline(y=avg_g_cal, color=color_g, linestyle='--', linewidth=2, alpha=0.6,
+                              label=f'Avg (G Cal): {avg_g_cal:.1f} ± {std_g_cal:.1f}')
+            
+            # Plot E variant (teal)
+            if len(q1_e) > 0:
+                x_e = np.arange(len(q1_e))
+                ax.plot(x_e, q1_e, color=color_e, linestyle='-', marker='s', 
+                       label=f'Avg GL Q1 (E - Original)', linewidth=2.5, markersize=6)
+                avg_e = np.mean(q1_e)
+                std_e = np.std(q1_e)
+                ax.axhline(y=avg_e, color=color_e, linestyle='-', linewidth=2.5, alpha=0.8, 
+                          label=f'Avg (E): {avg_e:.1f} ± {std_e:.1f}')
+                
+                # Plot calibrated E if available
+                if q1_e_cal is not None and len(q1_e_cal) > 0:
+                    ax.plot(x_e, q1_e_cal, color=color_e, linestyle='--', marker='s', 
+                           label=f'Avg GL Q1 (E - Calibrated)', linewidth=2.5, markersize=6, alpha=0.7)
+                    avg_e_cal = np.mean(q1_e_cal)
+                    std_e_cal = np.std(q1_e_cal)
+                    ax.axhline(y=avg_e_cal, color=color_e, linestyle='--', linewidth=2, alpha=0.6,
+                              label=f'Avg (E Cal): {avg_e_cal:.1f} ± {std_e_cal:.1f}')
+            
+            # Plot Default variant if it exists
+            if len(q1_default) > 0:
+                x_default = np.arange(len(q1_default))
+                ax.plot(x_default, q1_default, color=color_default, linestyle='-', marker='^', 
+                       label=f'Avg GL Q1 (Default - Original)', linewidth=2.5, markersize=6)
+                avg_default = np.mean(q1_default)
+                std_default = np.std(q1_default)
+                ax.axhline(y=avg_default, color=color_default, linestyle='-', linewidth=2, alpha=0.6,
+                          label=f'Avg (Default): {avg_default:.1f} ± {std_default:.1f}')
+                
+                # Plot calibrated Default if available
+                if q1_default_cal is not None and len(q1_default_cal) > 0:
+                    ax.plot(x_default, q1_default_cal, color=color_default, linestyle='--', marker='^', 
+                           label=f'Avg GL Q1 (Default - Calibrated)', linewidth=2.5, markersize=6, alpha=0.7)
+                    avg_default_cal = np.mean(q1_default_cal)
+                    std_default_cal = np.std(q1_default_cal)
+                    ax.axhline(y=avg_default_cal, color=color_default, linestyle='--', linewidth=1.5, alpha=0.4,
+                              label=f'Avg (Default Cal): {avg_default_cal:.1f} ± {std_default_cal:.1f}')
+            
+            ax.set_xlabel('Image Index', fontsize=12, fontweight='bold')
+            ax.set_ylabel('Avg GL Q1 (Gray Level)', fontsize=12, fontweight='bold')
+            ax.set_title('Average Gray Level Q1 (Original vs Calibrated)', fontsize=14, fontweight='bold')
+            ax.legend(loc='upper right', fontsize=10, ncol=2)
+            ax.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            plt.show()
+            
+            print("GL Q1 plot (with variants) displayed successfully")
+            
+        except Exception as e:
+            import traceback
+            print(f"Error creating GL Q1 plot with variants: {e}")
+            print(traceback.format_exc())
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Plot Error", f"Failed to create GL Q1 plot:\n{e}")
+    
+    def create_gl_q1_plot_with_histogram_variants(self, filenames_g, filenames_e, filenames_default,
+                                                  q1_g, q1_e, q1_default,
+                                                  q1_g_cal, q1_e_cal, q1_default_cal):
+        """Create GL Q1 plot WITH VARIANT SEPARATION + HISTOGRAM (curves + semi-transparent histogram)"""
+        try:
+            import matplotlib.pyplot as plt
+            import numpy as np
+            
+            # Set matplotlib backend
+            import matplotlib
+            matplotlib.use('Qt5Agg')
+            
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+            
+            # Define colors for variants
+            color_g = '#FF6B6B'      # Red for g
+            color_e = '#4ECDC4'      # Teal for e
+            color_default = '#95E1D3' # Light teal for default
+            
+            # ========== LEFT PLOT: CURVES ==========
+            
+            # Plot G variant (red)
+            if len(q1_g) > 0:
+                x_g = np.arange(len(q1_g))
+                ax1.plot(x_g, q1_g, color=color_g, linestyle='-', marker='o', 
+                        label=f'Avg GL Q1 (G - Original)', linewidth=2.5, markersize=6)
+                avg_g = np.mean(q1_g)
+                std_g = np.std(q1_g)
+                ax1.axhline(y=avg_g, color=color_g, linestyle='-', linewidth=2.5, alpha=0.8, 
+                           label=f'Avg (G): {avg_g:.1f} ± {std_g:.1f}')
+                
+                # Plot calibrated G if available
+                if q1_g_cal is not None and len(q1_g_cal) > 0:
+                    ax1.plot(x_g, q1_g_cal, color=color_g, linestyle='--', marker='o', 
+                            label=f'Avg GL Q1 (G - Calibrated)', linewidth=2.5, markersize=6, alpha=0.7)
+                    avg_g_cal = np.mean(q1_g_cal)
+                    std_g_cal = np.std(q1_g_cal)
+                    ax1.axhline(y=avg_g_cal, color=color_g, linestyle='--', linewidth=2, alpha=0.6,
+                               label=f'Avg (G Cal): {avg_g_cal:.1f} ± {std_g_cal:.1f}')
+            
+            # Plot E variant (teal)
+            if len(q1_e) > 0:
+                x_e = np.arange(len(q1_e))
+                ax1.plot(x_e, q1_e, color=color_e, linestyle='-', marker='s', 
+                        label=f'Avg GL Q1 (E - Original)', linewidth=2.5, markersize=6)
+                avg_e = np.mean(q1_e)
+                std_e = np.std(q1_e)
+                ax1.axhline(y=avg_e, color=color_e, linestyle='-', linewidth=2.5, alpha=0.8, 
+                           label=f'Avg (E): {avg_e:.1f} ± {std_e:.1f}')
+                
+                # Plot calibrated E if available
+                if q1_e_cal is not None and len(q1_e_cal) > 0:
+                    ax1.plot(x_e, q1_e_cal, color=color_e, linestyle='--', marker='s', 
+                            label=f'Avg GL Q1 (E - Calibrated)', linewidth=2.5, markersize=6, alpha=0.7)
+                    avg_e_cal = np.mean(q1_e_cal)
+                    std_e_cal = np.std(q1_e_cal)
+                    ax1.axhline(y=avg_e_cal, color=color_e, linestyle='--', linewidth=2, alpha=0.6,
+                               label=f'Avg (E Cal): {avg_e_cal:.1f} ± {std_e_cal:.1f}')
+            
+            # Plot Default variant if it exists
+            if len(q1_default) > 0:
+                x_default = np.arange(len(q1_default))
+                ax1.plot(x_default, q1_default, color=color_default, linestyle='-', marker='^', 
+                        label=f'Avg GL Q1 (Default - Original)', linewidth=2.5, markersize=6)
+                avg_default = np.mean(q1_default)
+                std_default = np.std(q1_default)
+                ax1.axhline(y=avg_default, color=color_default, linestyle='-', linewidth=2, alpha=0.6,
+                           label=f'Avg (Default): {avg_default:.1f} ± {std_default:.1f}')
+                
+                # Plot calibrated Default if available
+                if q1_default_cal is not None and len(q1_default_cal) > 0:
+                    ax1.plot(x_default, q1_default_cal, color=color_default, linestyle='--', marker='^', 
+                            label=f'Avg GL Q1 (Default - Calibrated)', linewidth=2.5, markersize=6, alpha=0.7)
+                    avg_default_cal = np.mean(q1_default_cal)
+                    std_default_cal = np.std(q1_default_cal)
+                    ax1.axhline(y=avg_default_cal, color=color_default, linestyle='--', linewidth=1.5, alpha=0.4,
+                               label=f'Avg (Default Cal): {avg_default_cal:.1f} ± {std_default_cal:.1f}')
+            
+            ax1.set_xlabel('Image Index', fontsize=12, fontweight='bold')
+            ax1.set_ylabel('Avg GL Q1 (Gray Level)', fontsize=12, fontweight='bold')
+            ax1.set_title('Average Gray Level Q1 vs Device (Original vs Calibrated)', fontsize=12, fontweight='bold')
+            ax1.legend(loc='upper right', fontsize=9, ncol=2)
+            ax1.grid(True, alpha=0.3)
+            
+            # ========== RIGHT PLOT: HISTOGRAM WITH SEMI-TRANSPARENT BARS ==========
+            
+            # Prepare data for histogram - keep original and calibrated separate
+            g_orig = q1_g if q1_g is not None and len(q1_g) > 0 else np.array([])
+            e_orig = q1_e if q1_e is not None and len(q1_e) > 0 else np.array([])
+            default_orig = q1_default if q1_default is not None and len(q1_default) > 0 else np.array([])
+            
+            g_cal = q1_g_cal if q1_g_cal is not None and len(q1_g_cal) > 0 else None
+            e_cal = q1_e_cal if q1_e_cal is not None and len(q1_e_cal) > 0 else None
+            default_cal = q1_default_cal if q1_default_cal is not None and len(q1_default_cal) > 0 else None
+            
+            # Determine bins from all data (original only)
+            all_data_orig = np.concatenate([d for d in [g_orig, e_orig, default_orig] if len(d) > 0]) if (len(g_orig) > 0 or len(e_orig) > 0 or len(default_orig) > 0) else np.array([])
+            
+            if len(all_data_orig) > 0:
+                bins = np.linspace(all_data_orig.min(), all_data_orig.max(), 30)
+                
+                # Plot G variant - original and calibrated separately
+                if len(g_orig) > 0:
+                    ax2.hist(g_orig, bins=bins, color=color_g, alpha=0.75, 
+                            label=f'G Original - Mean: {np.mean(g_orig):.1f}', edgecolor='darkred', linewidth=1.2)
+                
+                if g_cal is not None and len(g_cal) > 0:
+                    ax2.hist(g_cal, bins=bins, color=color_g, alpha=0.45, hatch='///',
+                            label=f'G Calibrated - Mean: {np.mean(g_cal):.1f}', edgecolor='darkred', linewidth=1.2)
+                
+                # Plot E variant - original and calibrated separately
+                if len(e_orig) > 0:
+                    ax2.hist(e_orig, bins=bins, color=color_e, alpha=0.75, 
+                            label=f'E Original - Mean: {np.mean(e_orig):.1f}', edgecolor='darkslategray', linewidth=1.2)
+                
+                if e_cal is not None and len(e_cal) > 0:
+                    ax2.hist(e_cal, bins=bins, color=color_e, alpha=0.45, hatch='///',
+                            label=f'E Calibrated - Mean: {np.mean(e_cal):.1f}', edgecolor='darkslategray', linewidth=1.2)
+                
+                # Plot Default variant if exists
+                if len(default_orig) > 0:
+                    ax2.hist(default_orig, bins=bins, color=color_default, alpha=0.75, 
+                            label=f'Default Original - Mean: {np.mean(default_orig):.1f}', edgecolor='black', linewidth=1.2)
+                
+                if default_cal is not None and len(default_cal) > 0:
+                    ax2.hist(default_cal, bins=bins, color=color_default, alpha=0.45, hatch='///',
+                            label=f'Default Calibrated - Mean: {np.mean(default_cal):.1f}', edgecolor='black', linewidth=1.2)
+            
+            ax2.set_xlabel('Avg GL Q1 Value', fontsize=12, fontweight='bold')
+            ax2.set_ylabel('Frequency', fontsize=12, fontweight='bold')
+            ax2.set_title('Histogram of Avg GL Q1 (Original vs Calibrated)', fontsize=12, fontweight='bold')
+            ax2.legend(loc='upper right', fontsize=9, ncol=2)
+            ax2.grid(True, alpha=0.3, axis='y')
+            
+            # Add interactive tooltips with filenames for curve plot (left)
+            try:
+                import mplcursors
+                
+                # Tooltips for G variant
+                if len(q1_g) > 0:
+                    annotations_g = []
+                    for i, yi in enumerate(q1_g):
+                        annotations_g.append(f"Index {i} (G)\n{filenames_g[i]}\nValue: {yi:.1f}")
+                    
+                    lines_g = [line for line in ax1.get_lines() if line.get_color() == color_g and line.get_linestyle() == '-' and line.get_marker() == 'o']
+                    if lines_g:
+                        cursor_g = mplcursors.cursor(lines_g[0], hover=True)
+                        cursor_g.connect("add", lambda sel: sel.annotation.set_text(
+                            annotations_g[int(sel.index)] if int(sel.index) < len(annotations_g) else "N/A"))
+                
+                # Tooltips for E variant
+                if len(q1_e) > 0:
+                    annotations_e = []
+                    for i, yi in enumerate(q1_e):
+                        annotations_e.append(f"Index {i} (E)\n{filenames_e[i]}\nValue: {yi:.1f}")
+                    
+                    lines_e = [line for line in ax1.get_lines() if line.get_color() == color_e and line.get_linestyle() == '-' and line.get_marker() == 's']
+                    if lines_e:
+                        cursor_e = mplcursors.cursor(lines_e[0], hover=True)
+                        cursor_e.connect("add", lambda sel: sel.annotation.set_text(
+                            annotations_e[int(sel.index)] if int(sel.index) < len(annotations_e) else "N/A"))
+            except ImportError:
+                print("mplcursors not installed - tooltips unavailable. Install with: pip install mplcursors")
+            
+            plt.tight_layout()
+            plt.show()
+            
+            print("GL Q1 plot with histogram (variants + semi-transparent bars) displayed successfully")
+            
+        except Exception as e:
+            import traceback
+            print(f"Error creating GL Q1 plot with histogram variants: {e}")
+            print(traceback.format_exc())
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Plot Error", f"Failed to create GL Q1 plot with histogram:\n{e}")
     
     def create_normalized_plot(self, filenames, norm_q2, norm_q3, norm_q4, 
                               avg_q2, avg_q3, avg_q4,
